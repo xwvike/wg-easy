@@ -10,7 +10,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'wg-easy'
+    if: github.repository_owner == 'xwvike'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
