@@ -28,7 +28,7 @@ services:
       # - UI_TRAFFIC_STATS=true
       # - UI_CHART_TYPE=0 # (0 Charts disabled, 1 # Line chart, 2 # Area chart, 3 # Bar chart)
 
-    image: ghcr.io/wg-easy/wg-easy:14
+    image: ghcr.io/xwvike/wg-easy:14
     container_name: wg-easy
     volumes:
       - etc_wireguard:/etc/wireguard
