@@ -24,7 +24,7 @@ class API {
     let data;
     if (contentType && contentType.includes('application/json')) {
       data = await res.json();
-    } else if(contentType && contentType.includes('text/plain')) {
+    } else if (contentType && contentType.includes('text/plain')) {
       data = await res.text();
     }
 
@@ -152,7 +152,7 @@ class API {
     });
   }
 
-    async updateClientAllowedIPs({ clientId, allowedIPs }) {
+  async updateClientAllowedIPs({ clientId, allowedIPs }) {
     return this.call({
       method: 'put',
       path: `/wireguard/client/${clientId}/allowedips`,
@@ -163,8 +163,8 @@ class API {
   async getClientConf({ clientId }) {
     return this.call({
       method: 'get',
-      path: `/wireguard/client/${clientId}/configuration`
-    })
+      path: `/wireguard/client/${clientId}/configuration`,
+    });
   }
 
 }

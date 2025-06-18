@@ -244,14 +244,14 @@ module.exports = class Server {
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/allowedips', defineEventHandler(async (event) => {
-          const clientId = getRouterParam(event, 'clientId');
-          if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-            throw createError({ status: 403 });
-          }
-          const { allowedIPs } = await readBody(event);
-          await WireGuard.updateClientAllowedIPs({ clientId, allowedIPs });
-          return { success: true };
-        }));
+        const clientId = getRouterParam(event, 'clientId');
+        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
+          throw createError({ status: 403 });
+        }
+        const { allowedIPs } = await readBody(event);
+        await WireGuard.updateClientAllowedIPs({ clientId, allowedIPs });
+        return { success: true };
+      }));
 
     const safePathJoin = (base, target) => {
       // Manage web root (edge case)
@@ -304,7 +304,7 @@ module.exports = class Server {
           getMeta: async (id) => {
             const filePath = safePathJoin(publicDir, id);
 
-            const stats = await stat(filePath).catch(() => {});
+            const stats = await stat(filePath).catch(() => { });
             if (!stats || !stats.isFile()) {
               return;
             }

@@ -454,7 +454,7 @@ const messages = { // eslint-disable-line no-unused-vars
     madeBy: 'Feito por',
     donate: 'Doar',
   },
-  "zh_CN": {
+  zh_CN: {
     name: '名称',
     password: '密码',
     signIn: '登录',
@@ -488,7 +488,7 @@ const messages = { // eslint-disable-line no-unused-vars
     save: '保存',
     InvalidIPv4address: '无效的IPv4地址',
   },
-  "zh_TW": {
+  zh_TW: {
     name: '名字',
     password: '密碼',
     signIn: '登入',

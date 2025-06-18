@@ -64,7 +64,7 @@ new Vue({
     clientEditAddress: null,
     clientEditAddressId: null,
     clientEditAllowedIPs: null,
-    userInputIP:[0,0,0,0,0],
+    userInputIP: [0, 0, 0, 0, 0],
     qrcode: null,
 
     currentRelease: null,
@@ -177,7 +177,7 @@ new Vue({
       this.clients = clients.map((client) => {
         if (client.name.includes('@') && client.name.includes('.')) {
           client.avatar = `https://www.gravatar.com/avatar/${md5(client.name)}?d=monsterid`;
-        }else {
+        } else {
           client.avatar = `https://www.gravatar.com/avatar/${client.name}?d=monsterid`;
         }
 
@@ -362,7 +362,7 @@ new Vue({
       const address = this.userInputIP.slice(0, 4).join('.');
       // Validate IPv4 address
       const ipRegex = /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-      if (!ipRegex.test(address)|| this.userInputIP[4] < 0 || this.userInputIP[4] > 32) {
+      if (!ipRegex.test(address) || this.userInputIP[4] < 0 || this.userInputIP[4] > 32) {
         alert(i18n.t('InvalidIPv4address'));
         return;
       }
@@ -376,7 +376,7 @@ new Vue({
       const allowedIPs = [...this.clientEditAllowedIPs.allowedIPs];
       allowedIPs.splice(index, 1);
       this.clientEditAllowedIPs.allowedIPs = allowedIPs;
-    }
+    },
   },
   filters: {
     bytes,
