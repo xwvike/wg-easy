@@ -110,14 +110,22 @@ PostDown = ${WG_POST_DOWN}
 
     for (const [clientId, client] of Object.entries(config.clients)) {
       if (!client.enabled) continue;
-
+      let allowedIPs = '';
+      if(client?.allowedIPs){
+        for (const allowedIP of client.allowedIPs) {
+          allowedIPs += `,${allowedIP.address}/${allowedIP.cidr}`;
+        }
+        allowedIPs = allowedIPs.substring(1);
+      }else {
+        allowedIPs = client.address;
+      }
       result += `
 
 # Client: ${client.name} (${clientId})
 [Peer]
 PublicKey = ${client.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
-}AllowedIPs = ${client.address}/32`;
+}AllowedIPs = ${allowedIPs}`;
     }
 
     debug('Config saving...');
@@ -146,7 +154,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
       publicKey: client.publicKey,
       createdAt: new Date(client.createdAt),
       updatedAt: new Date(client.updatedAt),
-      allowedIPs: client.allowedIPs,
+      allowedIPs: client?.allowedIPs?client.allowedIPs:[{type:'ipv4', address:client.address, cidr: 32}],
       downloadableConfig: 'privateKey' in client,
       persistentKeepalive: null,
       latestHandshakeAt: null,
@@ -268,6 +276,8 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
       createdAt: new Date(),
       updatedAt: new Date(),
 
+      allowedIPs: [{type:'ipv4', address, cidr: 32}],
+
       enabled: true,
     };
 
@@ -321,6 +331,11 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
       throw new ServerError(`Invalid Address: ${address}`, 400);
     }
 
+    if(client?.allowedIPs){
+      let allowedIPs = client.allowedIPs
+      client.allowedIPs[0].address = address;
+    }
+
     client.address = address;
     client.updatedAt = new Date();
 
@@ -351,6 +366,20 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   // Shutdown wireguard
   async Shutdown() {
     await Util.exec('wg-quick down wg0').catch(() => {});
+  }
+
+  async updateClientAllowedIPs({ clientId, allowedIPs }) {
+    const client = await this.getClient({ clientId });
+    let ips = allowedIPs.map(item=>item.address)
+    ips.forEach(ip=>{
+      if (!Util.isValidIPv4(ip)) {
+        throw new ServerError(`Invalid Address: ${ip}`, 400);
+      }
+    })
+    client.allowedIPs = allowedIPs;
+    client.updatedAt = new Date();
+
+    await this.saveConfig();
   }
 
 };

@@ -34,6 +34,11 @@ const messages = { // eslint-disable-line no-unused-vars
     backup: 'Backup',
     titleRestoreConfig: 'Restore your configuration',
     titleBackupConfig: 'Backup your configuration',
+    editAllowedIPs: 'Edit AllowedIPs',
+    copyConfig: 'Copy Configuration',
+    copySuccess: 'Configuration copied to clipboard!',
+    save: 'Save',
+    InvalidIPv4address: 'Invalid IPv4 address',
   },
   ua: {
     name: 'Ім`я',
@@ -449,7 +454,7 @@ const messages = { // eslint-disable-line no-unused-vars
     madeBy: 'Feito por',
     donate: 'Doar',
   },
-  chs: {
+  "zh_CN": {
     name: '名称',
     password: '密码',
     signIn: '登录',
@@ -475,8 +480,15 @@ const messages = { // eslint-disable-line no-unused-vars
     downloadConfig: '下载配置',
     madeBy: '由',
     donate: '捐赠',
+    restore: '载入备份',
+    backup: '备份',
+    editAllowedIPs: '配置接受的IP',
+    copyConfig: '复制配置',
+    copySuccess: '配置已复制到剪贴板！',
+    save: '保存',
+    InvalidIPv4address: '无效的IPv4地址',
   },
-  cht: {
+  "zh_TW": {
     name: '名字',
     password: '密碼',
     signIn: '登入',

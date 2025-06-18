@@ -63,6 +63,8 @@ new Vue({
     clientEditNameId: null,
     clientEditAddress: null,
     clientEditAddressId: null,
+    clientEditAllowedIPs: null,
+    userInputIP:[0,0,0,0,0],
     qrcode: null,
 
     currentRelease: null,
@@ -174,7 +176,9 @@ new Vue({
       const clients = await this.api.getClients();
       this.clients = clients.map((client) => {
         if (client.name.includes('@') && client.name.includes('.')) {
-          client.avatar = `https://gravatar.com/avatar/${sha256(client.name.toLowerCase().trim())}.jpg`;
+          client.avatar = `https://www.gravatar.com/avatar/${md5(client.name)}?d=monsterid`;
+        }else {
+          client.avatar = `https://www.gravatar.com/avatar/${client.name}?d=monsterid`;
         }
 
         if (!this.clientsPersist[client.id]) {
@@ -336,6 +340,43 @@ new Vue({
     toggleCharts() {
       localStorage.setItem('uiShowCharts', this.uiShowCharts ? 1 : 0);
     },
+    updateClientAllowedIPs(client) {
+      this.api.updateClientAllowedIPs({ clientId: client.id, allowedIPs: client.allowedIPs })
+        .catch((err) => alert(err.message || err.toString()))
+        .finally(() => this.refresh().catch(console.error));
+    },
+    copyConf(client) {
+      this.api.getClientConf({ clientId: client.id })
+        .then((conf) => {
+          const el = document.createElement('textarea');
+          el.value = conf;
+          document.body.appendChild(el);
+          el.select();
+          document.execCommand('copy');
+          document.body.removeChild(el);
+          alert(i18n.t('copySuccess'));
+        })
+        .catch((err) => alert(err.message || err.toString()));
+    },
+    addNewIP() {
+      const address = this.userInputIP.slice(0, 4).join('.');
+      // Validate IPv4 address
+      const ipRegex = /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+      if (!ipRegex.test(address)|| this.userInputIP[4] < 0 || this.userInputIP[4] > 32) {
+        alert(i18n.t('InvalidIPv4address'));
+        return;
+      }
+      const allowedIPs = [...this.clientEditAllowedIPs.allowedIPs];
+      const obj = { type: 'ipv4', address, cidr: this.userInputIP[4] };
+      allowedIPs.push(obj);
+      this.clientEditAllowedIPs.allowedIPs = allowedIPs;
+      this.userInputIP = [0, 0, 0, 0, 0];
+    },
+    removeIP(index) {
+      const allowedIPs = [...this.clientEditAllowedIPs.allowedIPs];
+      allowedIPs.splice(index, 1);
+      this.clientEditAllowedIPs.allowedIPs = allowedIPs;
+    }
   },
   filters: {
     bytes,

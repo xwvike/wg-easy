@@ -5,8 +5,8 @@ services:
   wg-easy:
     environment:
       # Change Language:
-      # (Supports: en, ua, ru, tr, no, pl, fr, de, ca, es, ko, vi, nl, is, pt, chs, cht, it, th, hi)
-      - LANG=de
+      # (Supports: en, ua, ru, tr, no, pl, fr, de, ca, es, ko, vi, nl, is, pt, zh_CN, zh_TW, it, th, hi)
+      - LANG=zh_CN
       # ⚠️ Required:
       # Change this to your host's public address
       - WG_HOST=raspberrypi.local
@@ -43,3 +43,4 @@ services:
     sysctls:
       - net.ipv4.ip_forward=1
       - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv4.conf.all.rp_filter=2

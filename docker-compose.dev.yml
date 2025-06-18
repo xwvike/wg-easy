@@ -1,7 +1,6 @@
 services:
   wg-easy:
-    build:
-      dockerfile: ./Dockerfile
+    build: .
     command: npm run serve
     volumes:
       - ./src/:/app/
@@ -14,4 +13,4 @@ services:
       - SYS_MODULE
     environment:
       # - PASSWORD_HASH=p
-      - WG_HOST=192.168.1.233
+      - WG_HOST=192.168.100.3

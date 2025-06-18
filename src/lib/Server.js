@@ -182,6 +182,14 @@ module.exports = class Server {
         const clientId = getRouterParam(event, 'clientId');
         const client = await WireGuard.getClient({ clientId });
         const config = await WireGuard.getClientConfiguration({ clientId });
+        const acceptHeader = event.node.req.headers.accept || '';
+        const isJsonRequest = acceptHeader.includes('application/json');
+        const acceptsJson = acceptHeader.includes('application/json');
+
+        if (isJsonRequest || acceptsJson) {
+          setHeader(event, 'Content-Type', 'text/plain');
+          return config;
+        }
         const configName = client.name
           .replace(/[^a-zA-Z0-9_=+.-]/g, '-')
           .replace(/(-{2,}|-$)/g, '-')
@@ -234,7 +242,16 @@ module.exports = class Server {
         const { address } = await readBody(event);
         await WireGuard.updateClientAddress({ clientId, address });
         return { success: true };
-      }));
+      }))
+      .put('/api/wireguard/client/:clientId/allowedips', defineEventHandler(async (event) => {
+          const clientId = getRouterParam(event, 'clientId');
+          if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
+            throw createError({ status: 403 });
+          }
+          const { allowedIPs } = await readBody(event);
+          await WireGuard.updateClientAllowedIPs({ clientId, allowedIPs });
+          return { success: true };
+        }));
 
     const safePathJoin = (base, target) => {
       // Manage web root (edge case)
