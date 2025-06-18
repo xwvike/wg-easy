@@ -9,7 +9,7 @@ With version 14 of wg-easy, a password hashed with bcrypt is needed instead of t
     The easiest way to generate a bcrypt password hash with wgpw is using docker and node:
 
     ```sh
-    docker run ghcr.io/wg-easy/wg-easy:14 node -e 'const bcrypt = require("bcryptjs"); const hash = bcrypt.hashSync("YOUR_PASSWORD", 10); console.log(hash.replace(/\$/g, "$$$$"));'
+    docker run ghcr.io/xwvike/wg-easy:14 node -e 'const bcrypt = require("bcryptjs"); const hash = bcrypt.hashSync("YOUR_PASSWORD", 10); console.log(hash.replace(/\$/g, "$$$$"));'
     ```
 
     The hashed password will get printed on your terminal. Copy it and use on the `PASSWORD_HASH` environment variable in your docker compose.
@@ -19,7 +19,7 @@ With version 14 of wg-easy, a password hashed with bcrypt is needed instead of t
     If you are using `docker run` for running wg-easy, you must enclose the hash string in single quotes (`'...'`). You can use this command:
 
     ```sh
-    docker run --rm ghcr.io/wg-easy/wg-easy:14 node -e "const bcrypt = require('bcryptjs'); const hash = bcrypt.hashSync('YOUR_PASSWORD', 10); console.log('\'' + hash + '\'');"
+    docker run --rm ghcr.io/xwvike/wg-easy:14 node -e "const bcrypt = require('bcryptjs'); const hash = bcrypt.hashSync('YOUR_PASSWORD', 10); console.log('\'' + hash + '\'');"
     ```
 
     The hashed password will get printed on your terminal. Copy it and use on the `PASSWORD_HASH` environment variable in your docker run command.
@@ -29,7 +29,7 @@ With version 14 of wg-easy, a password hashed with bcrypt is needed instead of t
 `wg-password` (wgpw) is a script that generates bcrypt password hashes. You can use it with docker:
 
 ```sh
-docker run ghcr.io/wg-easy/wg-easy:14 wgpw YOUR_PASSWORD
+docker run ghcr.io/xwvike/wg-easy:14 wgpw YOUR_PASSWORD
 ```
 
 You will see an output similar to this:
