@@ -28,7 +28,7 @@ services:
       # - UI_TRAFFIC_STATS=true
       # - UI_CHART_TYPE=0 # (0 Charts disabled, 1 # Line chart, 2 # Area chart, 3 # Bar chart)
 
-    image: ghcr.io/xwvike/wg-easy:14
+    image: ghcr.io/xwvike/wg-easy
     container_name: wg-easy
     volumes:
       - etc_wireguard:/etc/wireguard
@@ -42,5 +42,4 @@ services:
       # - NET_RAW # ⚠️ Uncomment if using Podman 
     sysctls:
       - net.ipv4.ip_forward=1
-      - net.ipv4.conf.all.src_valid_mark=1
-      - net.ipv4.conf.all.rp_filter=2
+      - net.ipv4.conf.all.src_valid_mark=0

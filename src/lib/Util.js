@@ -2,6 +2,9 @@
 
 const childProcess = require('child_process');
 
+function __ipToInt(ip) {
+  return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0);
+}
 module.exports = class Util {
 
   static isValidIPv4(str) {
@@ -15,6 +18,37 @@ module.exports = class Util {
     }
 
     return true;
+  }
+
+  static validateAllowedIP(ipCidr) {
+    const [ip, cidrStr] = ipCidr.split('/');
+    const cidr = cidrStr ? parseInt(cidrStr, 10) : 32;
+
+    if (!Util.isValidIPv4(ip)) {
+      return `Invalid IP address: ${ip}`;
+    }
+
+    const bannedIPs = new Set([
+      '0.0.0.0', '255.255.255.255', '127.0.0.1',
+      '10.0.0.1', '172.16.0.1',
+    ]);
+
+    if (bannedIPs.has(ip) || ip.endsWith('.255')) {
+      return `Dangerous IP address not allowed: ${ip}`;
+    }
+
+    if (cidr < 24) {
+      return `Subnet mask too broad: ${ipCidr}`;
+    }
+
+    // 判断是否在 172.16.0.0/12（Docker 默认桥接网段）
+    const ipNum = __ipToInt(ip);
+    const dockerStart = __ipToInt('172.16.0.0');
+    const dockerEnd = __ipToInt('172.31.255.255');
+    if (ipNum >= dockerStart && ipNum <= dockerEnd) {
+      return `IP in Docker default network is not allowed: ${ipCidr}`;
+    }
+    return '';
   }
 
   static promisify(fn) {

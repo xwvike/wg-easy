@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
+  "version": "14.0.1",
   "scripts": {
     "sudobuild": "DOCKER_BUILDKIT=1 sudo docker build --tag wg-easy .",
     "build": "DOCKER_BUILDKIT=1 docker build --tag wg-easy .",
