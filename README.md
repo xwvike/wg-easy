@@ -8,6 +8,8 @@
 
 You have found the easiest way to install & manage WireGuard on any Linux host!
 
+[简体中文版本](README.zh.md)
+
 <p align="center">
   <img src="./assets/screenshot.png" width="802" />
 </p>
@@ -34,6 +36,7 @@ You have found the easiest way to install & manage WireGuard on any Linux host!
 
 This branch is only for the v14 release of WireGuard Easy.
 For newer versions, please refer to the [master branch](https://github.com/wg-easy/wg-easy/tree/master).
+Although upstream moved new features to v15+, this fork will continue to maintain and evolve v14.
 
 ## Installation
 
