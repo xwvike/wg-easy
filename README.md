@@ -8,7 +8,7 @@
 
 You have found the easiest way to install & manage WireGuard on any Linux host!
 
-[简体中文版本](README.zh.md)
+[中文文档（简体）](README.zh.md)
 
 <p align="center">
   <img src="./assets/screenshot.png" width="802" />
