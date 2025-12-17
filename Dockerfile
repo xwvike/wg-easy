@@ -2,8 +2,8 @@
 # nodejs 20 hangs on build with armv6/armv7
 FROM docker.io/library/node:18-bullseye-slim AS build_node_modules
 
-# Update npm to latest
-RUN npm install -g npm@latest
+# Pin npm to the latest version compatible with Node 18
+RUN npm install -g npm@10.8.2
 
 # Copy Web UI
 COPY src /app
