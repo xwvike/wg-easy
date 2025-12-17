@@ -18,8 +18,9 @@ You have found the easiest way to install & manage WireGuard on any Linux host!
 * All-in-one: WireGuard + Web UI.
 * Easy installation, simple to use.
 * List, create, edit, delete, enable & disable clients.
+* Edit each client's AllowedIPs directly from the UI.
 * Show a client's QR code.
-* Download a client's configuration file.
+* Download or copy a client's configuration.
 * Statistics for which clients are connected.
 * Tx/Rx charts for each connected client.
 * Gravatar support.
