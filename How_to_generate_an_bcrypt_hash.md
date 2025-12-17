@@ -2,6 +2,8 @@
 
 With version 14 of wg-easy, a password hashed with bcrypt is needed instead of the plain-text password string. This doc explains how to generate the hash based on a plain-text password.
 
+[中文文档（简体）](How_to_generate_an_bcrypt_hash.zh.md)
+
 ## Using Docker + node
 
 - You are using docker compose
