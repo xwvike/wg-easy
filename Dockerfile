@@ -1,6 +1,6 @@
 # As a workaround we have to build on nodejs 18
 # nodejs 20 hangs on build with armv6/armv7
-FROM docker.io/library/node:18-bullseye-slim AS build_node_modules
+FROM docker.io/library/node:18-bookworm-slim AS build_node_modules
 
 # Pin npm to the latest version compatible with Node 18
 RUN npm install -g npm@10.8.2
@@ -13,7 +13,7 @@ RUN npm ci --omit=dev &&\
 
 # Copy build result to a new image.
 # This saves a lot of disk space.
-FROM docker.io/library/node:18-bullseye-slim
+FROM docker.io/library/node:18-bookworm-slim
 HEALTHCHECK CMD /usr/bin/timeout 5s /bin/sh -c "/usr/bin/wg show | /bin/grep -q interface || exit 1" --interval=1m --timeout=5s --retries=3
 COPY --from=build_node_modules /app /app
 
@@ -33,8 +33,8 @@ RUN chmod +x /bin/wgpw
 # Install Linux packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    dpkg \
     dumb-init \
+    iproute2 \
     iptables \
     wireguard-tools && \
     rm -rf /var/lib/apt/lists/*
