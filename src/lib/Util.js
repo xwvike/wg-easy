@@ -45,7 +45,8 @@ module.exports = class Util {
       '10.0.0.1', '172.16.0.1',
     ]);
 
-    if (bannedIPs.has(ip) || ip.endsWith('.255')) {
+    const network = { address: ip, cidr };
+    if ([...bannedIPs].some((banned) => Util.cidrOverlaps(network, { address: banned, cidr: 32 })) || ip.endsWith('.255')) {
       return `Dangerous IP address not allowed: ${ip}`;
     }
 

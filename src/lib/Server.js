@@ -211,9 +211,6 @@ module.exports = class Server {
       }))
       .put('/api/wireguard/client/:clientId/fenced', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
         const { fenced } = await readBody(event);
         await WireGuard.updateClientFenced({ clientId, fenced });
         return { success: true };
@@ -225,43 +222,28 @@ module.exports = class Server {
       }))
       .post('/api/wireguard/client/:clientId/enable', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
         await WireGuard.enableClient({ clientId });
         return { success: true };
       }))
       .post('/api/wireguard/client/:clientId/disable', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
         await WireGuard.disableClient({ clientId });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/name', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
         const { name } = await readBody(event);
         await WireGuard.updateClientName({ clientId, name });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/address', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
         const { address } = await readBody(event);
         await WireGuard.updateClientAddress({ clientId, address });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/allowedips', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
         const { allowedIPs } = await readBody(event);
         await WireGuard.updateClientAllowedIPs({ clientId, allowedIPs });
         return { success: true };

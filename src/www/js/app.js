@@ -299,14 +299,14 @@ new Vue({
       this.clientSettings = null;
       const cidrs = (ips) => ips.map((ip) => `${ip.address}/${ip.cidr}`).join(',');
       try {
-        if (cidrs(draft.allowedIPs) !== cidrs(client.allowedIPs)) {
-          await this.api.updateClientAllowedIPs({ clientId, allowedIPs: draft.allowedIPs });
-        }
         if (draft.fenced !== client.fenced) {
           await this.api.updateClientFenced({ clientId, fenced: draft.fenced });
         }
         if (draft.enabled !== client.enabled) {
           await (draft.enabled ? this.api.enableClient({ clientId }) : this.api.disableClient({ clientId }));
+        }
+        if (cidrs(draft.allowedIPs) !== cidrs(client.allowedIPs)) {
+          await this.api.updateClientAllowedIPs({ clientId, allowedIPs: draft.allowedIPs });
         }
       } catch (err) {
         alert(err.message || err.toString());

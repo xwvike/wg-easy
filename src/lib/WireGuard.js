@@ -127,9 +127,9 @@ module.exports = class WireGuard {
       ':WG_EASY_FWD - [0:0]',
       ':WG_EASY_IN - [0:0]',
       ...sources.flatMap((src) => [
-        `-A WG_EASY_FWD -s ${src} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`,
+        `-A WG_EASY_FWD -s ${src} -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j ACCEPT`,
         `-A WG_EASY_FWD -s ${src} -j REJECT`,
-        `-A WG_EASY_IN -s ${src} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`,
+        `-A WG_EASY_IN -s ${src} -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j ACCEPT`,
         `-A WG_EASY_IN -s ${src} -j REJECT`,
       ]),
       'COMMIT',
@@ -162,7 +162,7 @@ module.exports = class WireGuard {
     const current = (await Util.exec('ip -4 route show dev wg0', { log: false }))
       .split('\n')
       .map((line) => line.split(' ')[0])
-      .filter((dst) => dst)
+      .filter((dst) => Util.isValidIPv4(dst.split('/')[0]))
       .map((dst) => (dst.includes('/') ? dst : `${dst}/32`))
       .filter((dst) => !isWgSubnet(dst.split('/')[0]));
 
@@ -191,9 +191,12 @@ module.exports = class WireGuard {
   }
 
   __claimedIPs(config, exceptClientId) {
-    return Object.entries(config.clients)
-      .filter(([clientId]) => clientId !== exceptClientId)
-      .flatMap(([, client]) => client.allowedIPs ?? [{ address: client.address, cidr: 32 }]);
+    return [
+      { address: config.server.address, cidr: 32 },
+      ...Object.entries(config.clients)
+        .filter(([clientId]) => clientId !== exceptClientId)
+        .flatMap(([, client]) => client.allowedIPs ?? [{ address: client.address, cidr: 32 }]),
+    ];
   }
 
   __assertNoOverlap(config, clientId, allowedIPs) {
@@ -347,7 +350,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
 
   async getClient({ clientId }) {
     const config = await this.getConfig();
-    const client = config.clients[clientId];
+    const client = Object.hasOwn(config.clients, clientId) ? config.clients[clientId] : null;
     if (!client) {
       throw new ServerError(`Client Not Found: ${clientId}`, 404);
     }
@@ -453,7 +456,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   async deleteClient({ clientId }) {
     const config = await this.getConfig();
 
-    if (config.clients[clientId]) {
+    if (Object.hasOwn(config.clients, clientId)) {
       delete config.clients[clientId];
       await this.saveConfig();
     }
