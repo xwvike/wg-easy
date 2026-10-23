@@ -175,11 +175,7 @@ new Vue({
 
       const clients = await this.api.getClients();
       this.clients = clients.map((client) => {
-        if (client.name.includes('@') && client.name.includes('.')) {
-          client.avatar = `https://www.gravatar.com/avatar/${md5(client.name)}?d=monsterid`;
-        } else {
-          client.avatar = `https://www.gravatar.com/avatar/${client.name}?d=monsterid`;
-        }
+        client.avatar = `https://www.gravatar.com/avatar/${md5(client.name.trim().toLowerCase())}?d=monsterid`;
 
         if (!this.clientsPersist[client.id]) {
           this.clientsPersist[client.id] = {};

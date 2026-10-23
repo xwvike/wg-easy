@@ -90,20 +90,108 @@ module.exports = class WireGuard {
     const config = await this.getConfig();
     await this.__saveConfig(config);
     await this.__syncConfig();
+    await this.__syncRoutes(config);
   }
 
-  async __addIpRoute(list) {
-    if (!list || !Array.isArray(list) || list.length === 0) {
-      return;
-    }
-    const routes = list.map((item) => {
-      if (item.address.split('.').slice(0, 3).join('.') === WG_DEFAULT_ADDRESS.split('.').slice(0, 3).join('.')) {
-        return null;
-      }
-      return `ip route replace ${item.address}/${item.cidr} dev wg0 2>/dev/null`;
-    }).filter((item) => item !== null);
+  async __syncRoutes(config) {
+    const wgSubnet = WG_DEFAULT_ADDRESS.replace('x', '0');
+    const isWgSubnet = (address) => Util.networkAddress(address, 24) === wgSubnet;
 
-    await Util.exec(routes.join(' && '));
+    const desired = new Set();
+    for (const client of Object.values(config.clients)) {
+      if (!client.enabled || !client.allowedIPs) continue;
+      for (const { address, cidr } of client.allowedIPs) {
+        if (!isWgSubnet(address)) desired.add(`${Util.networkAddress(address, cidr)}/${cidr}`);
+      }
+    }
+
+    const current = (await Util.exec('ip -4 route show dev wg0', { log: false }))
+      .split('\n')
+      .map((line) => line.split(' ')[0])
+      .filter((dst) => dst)
+      .map((dst) => (dst.includes('/') ? dst : `${dst}/32`))
+      .filter((dst) => !isWgSubnet(dst.split('/')[0]));
+
+    const commands = [
+      ...current.filter((dst) => !desired.has(dst)).map((dst) => `ip route del ${dst} dev wg0`),
+      ...[...desired].map((dst) => `ip route replace ${dst} dev wg0`),
+    ];
+
+    const failures = [];
+    for (const cmd of commands) {
+      await Util.exec(cmd).catch((err) => failures.push(`${cmd}: ${err.message.trim()}`));
+    }
+
+    if (failures.length > 0) {
+      throw new ServerError(`Config saved, but failed to apply routes:\n${failures.join('\n')}`, 500);
+    }
+  }
+
+  __buildAllowedIPs(client, allowedIPs) {
+    if (!Array.isArray(allowedIPs)) {
+      throw new ServerError('Invalid AllowedIPs', 400);
+    }
+
+    const extra = allowedIPs
+      .filter((item) => !(item?.address === client.address && item?.cidr === 32))
+      .map((item) => {
+        const errorMessage = Util.validateAllowedIP(item ?? {});
+        if (errorMessage) {
+          throw new ServerError(errorMessage, 400);
+        }
+        return { type: 'ipv4', address: Util.networkAddress(item.address, item.cidr), cidr: item.cidr };
+      });
+
+    return [{ type: 'ipv4', address: client.address, cidr: 32 }, ...extra];
+  }
+
+  __claimedIPs(config, exceptClientId) {
+    return Object.entries(config.clients)
+      .filter(([clientId]) => clientId !== exceptClientId)
+      .flatMap(([, client]) => client.allowedIPs ?? [{ address: client.address, cidr: 32 }]);
+  }
+
+  __assertNoOverlap(config, clientId, allowedIPs) {
+    const claimed = this.__claimedIPs(config, clientId);
+    allowedIPs.forEach((ip, index) => {
+      const conflict = [...claimed, ...allowedIPs.slice(0, index)].find((other) => Util.cidrOverlaps(ip, other));
+      if (conflict) {
+        throw new ServerError(`${ip.address}/${ip.cidr} overlaps with ${conflict.address}/${conflict.cidr}`, 400);
+      }
+    });
+  }
+
+  __validateConfig(config) {
+    const isKey = (value) => typeof value === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(value);
+    const isOptionalKey = (value) => value == null || isKey(value);
+    const fail = (part) => {
+      throw new ServerError(`Invalid configuration: ${part}`, 400);
+    };
+
+    const { server, clients } = config ?? {};
+    if (!server || !isKey(server.privateKey) || !isKey(server.publicKey) || !Util.isValidIPv4(server.address)) {
+      fail('server');
+    }
+    if (!clients || typeof clients !== 'object' || Array.isArray(clients)) {
+      fail('clients');
+    }
+
+    for (const [clientId, client] of Object.entries(clients)) {
+      if (typeof client?.name !== 'string'
+        || !Util.isValidIPv4(client.address)
+        || !isKey(client.publicKey)
+        || !isOptionalKey(client.privateKey)
+        || !isOptionalKey(client.preSharedKey)) {
+        fail(`client ${clientId}`);
+      }
+      if (client.allowedIPs !== undefined) {
+        client.allowedIPs = this.__buildAllowedIPs(client, client.allowedIPs);
+      }
+    }
+
+    for (const [clientId, client] of Object.entries(clients)) {
+      this.__assertNoOverlap(config, clientId, client.allowedIPs ?? [{ address: client.address, cidr: 32 }]);
+    }
   }
 
   async __saveConfig(config) {
@@ -135,7 +223,7 @@ PostDown = ${WG_POST_DOWN}
       }
       result += `
 
-# Client: ${client.name} (${clientId})
+# Client: ${`${client.name} (${clientId})`.replace(/[\r\n]/g, ' ')}
 [Peer]
 PublicKey = ${client.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
@@ -261,14 +349,12 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     const preSharedKey = await Util.exec('wg genpsk');
 
     // Calculate next IP
+    const claimed = this.__claimedIPs(config);
     let address;
     for (let i = 2; i < 255; i++) {
-      const client = Object.values(config.clients).find((client) => {
-        return client.address === WG_DEFAULT_ADDRESS.replace('x', i);
-      });
-
-      if (!client) {
-        address = WG_DEFAULT_ADDRESS.replace('x', i);
+      const candidate = { address: WG_DEFAULT_ADDRESS.replace('x', i), cidr: 32 };
+      if (!claimed.some((ip) => Util.cidrOverlaps(ip, candidate))) {
+        address = candidate.address;
         break;
       }
     }
@@ -339,14 +425,18 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   }
 
   async updateClientAddress({ clientId, address }) {
+    const config = await this.getConfig();
     const client = await this.getClient({ clientId });
 
     if (!Util.isValidIPv4(address)) {
       throw new ServerError(`Invalid Address: ${address}`, 400);
     }
 
-    if (client?.allowedIPs) {
-      client.allowedIPs[0].address = address;
+    const allowedIPs = [{ type: 'ipv4', address, cidr: 32 }, ...(client.allowedIPs ?? []).slice(1)];
+    this.__assertNoOverlap(config, clientId, allowedIPs);
+
+    if (client.allowedIPs) {
+      client.allowedIPs = allowedIPs;
     }
 
     client.address = address;
@@ -362,9 +452,16 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
 
   async restoreConfiguration(config) {
     debug('Starting configuration restore process.');
-    const _config = JSON.parse(config);
+    let _config;
+    try {
+      _config = JSON.parse(config);
+    } catch (err) {
+      throw new ServerError(`Invalid configuration: ${err.message}`, 400);
+    }
+    this.__validateConfig(_config);
     await this.__saveConfig(_config);
     await this.__reloadConfig();
+    await this.__syncRoutes(_config);
     debug('Configuration restore process completed.');
   }
 
@@ -382,21 +479,16 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   }
 
   async updateClientAllowedIPs({ clientId, allowedIPs }) {
+    const config = await this.getConfig();
     const client = await this.getClient({ clientId });
-    const ips = allowedIPs.map((item) => `${item.address}/${item.cidr}`);
 
-    for (const ipCidr of ips) {
-      const errorMessage = Util.validateAllowedIP(ipCidr);
-      if (errorMessage) {
-        throw new ServerError(errorMessage, 400);
-      }
-    }
+    const normalized = this.__buildAllowedIPs(client, allowedIPs);
+    this.__assertNoOverlap(config, clientId, normalized);
 
-    client.allowedIPs = allowedIPs;
+    client.allowedIPs = normalized;
     client.updatedAt = new Date();
 
     await this.saveConfig();
-    await this.__addIpRoute(allowedIPs);
   }
 
 };

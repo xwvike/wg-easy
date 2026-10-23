@@ -2,30 +2,42 @@
 
 const childProcess = require('child_process');
 
+const IPV4_OCTET = '(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
+const IPV4_REGEX = new RegExp(`^(${IPV4_OCTET}\\.){3}${IPV4_OCTET}$`);
+
 function __ipToInt(ip) {
-  return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0);
+  return ip.split('.').reduce((acc, octet) => acc * 256 + Number(octet), 0);
 }
+
+function __intToIp(n) {
+  return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+}
+
 module.exports = class Util {
 
   static isValidIPv4(str) {
-    const blocks = str.split('.');
-    if (blocks.length !== 4) return false;
-
-    for (let value of blocks) {
-      value = parseInt(value, 10);
-      if (Number.isNaN(value)) return false;
-      if (value < 0 || value > 255) return false;
-    }
-
-    return true;
+    return typeof str === 'string' && IPV4_REGEX.test(str);
   }
 
-  static validateAllowedIP(ipCidr) {
-    const [ip, cidrStr] = ipCidr.split('/');
-    const cidr = cidrStr ? parseInt(cidrStr, 10) : 32;
+  static networkAddress(ip, cidr) {
+    const mask = cidr === 0 ? 0 : (~0 << (32 - cidr)) >>> 0;
+    return __intToIp((__ipToInt(ip) & mask) >>> 0);
+  }
+
+  static cidrOverlaps(a, b) {
+    const cidr = Math.min(a.cidr, b.cidr);
+    return Util.networkAddress(a.address, cidr) === Util.networkAddress(b.address, cidr);
+  }
+
+  static validateAllowedIP({ address: ip, cidr }) {
+    const ipCidr = `${ip}/${cidr}`;
 
     if (!Util.isValidIPv4(ip)) {
       return `Invalid IP address: ${ip}`;
+    }
+
+    if (!Number.isInteger(cidr) || cidr < 0 || cidr > 32) {
+      return `Invalid subnet mask: ${ipCidr}`;
     }
 
     const bannedIPs = new Set([
