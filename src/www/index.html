@@ -319,7 +319,7 @@
                   <div class="text-gray-400 dark:text-neutral-400 flex gap-1 items-center justify-between">
 
                     <!-- Enable/Disable -->
-                    <span class="text-xs whitespace-nowrap">{{$t("enabled")}}</span>
+                    <span class="text-xs whitespace-nowrap">{{$t("allowConnectLabel")}}</span>
                     <div @click="disableClient(client)" v-if="client.enabled === true" :title="$t('disableClient')"
                       class="inline-block align-middle flex-shrink-0 rounded-full w-10 h-6 mr-1 bg-red-800 cursor-pointer hover:bg-red-700 transition-all">
                       <div class="rounded-full w-4 h-4 m-1 ml-5 bg-white"></div>
@@ -332,7 +332,7 @@
                     </div>
 
                     <!-- Fence -->
-                    <span class="text-xs ml-1 whitespace-nowrap">{{$t("fenced")}}</span>
+                    <span class="text-xs ml-1 whitespace-nowrap">{{$t("inboundOnlyLabel")}}</span>
                     <button type="button" role="switch" :aria-checked="String(client.fenced)"
                       :title="$t('toggleFenced') + ': ' + $t('fencedHint')" @click="toggleFenced(client)"
                       class="inline-block align-middle flex-shrink-0 rounded-full w-10 h-6 mr-1 transition-all"
