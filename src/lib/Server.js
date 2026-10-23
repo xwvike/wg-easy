@@ -24,6 +24,7 @@ const {
 } = require('h3');
 
 const WireGuard = require('../services/WireGuard');
+const Util = require('./Util');
 
 const {
   PORT,
@@ -175,8 +176,14 @@ module.exports = class Server {
         debug(`Deleted Session: ${sessionId}`);
         return { success: true };
       }))
-      .get('/api/wireguard/client', defineEventHandler(() => {
-        return WireGuard.getClients();
+      .get('/api/wireguard/client', defineEventHandler(async (event) => {
+        const remote = (event.node.req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+        const clients = await WireGuard.getClients();
+        return clients.map((client) => ({
+          ...client,
+          isCurrent: Util.isValidIPv4(remote)
+            && client.allowedIPs.some((ip) => Util.cidrOverlaps(ip, { address: remote, cidr: 32 })),
+        }));
       }))
       .get('/api/wireguard/client/:clientId/qrcode.svg', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
@@ -198,8 +205,17 @@ module.exports = class Server {
         return config;
       }))
       .post('/api/wireguard/client', defineEventHandler(async (event) => {
-        const { name } = await readBody(event);
-        await WireGuard.createClient({ name });
+        const { name, fenced } = await readBody(event);
+        await WireGuard.createClient({ name, fenced });
+        return { success: true };
+      }))
+      .put('/api/wireguard/client/:clientId/fenced', defineEventHandler(async (event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
+          throw createError({ status: 403 });
+        }
+        const { fenced } = await readBody(event);
+        await WireGuard.updateClientFenced({ clientId, fenced });
         return { success: true };
       }))
       .delete('/api/wireguard/client/:clientId', defineEventHandler(async (event) => {

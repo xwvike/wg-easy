@@ -99,11 +99,19 @@ class API {
     })));
   }
 
-  async createClient({ name }) {
+  async createClient({ name, fenced }) {
     return this.call({
       method: 'post',
       path: '/wireguard/client',
-      body: { name },
+      body: { name, fenced },
+    });
+  }
+
+  async updateClientFenced({ clientId, fenced }) {
+    return this.call({
+      method: 'put',
+      path: `/wireguard/client/${clientId}/fenced`,
+      body: { fenced },
     });
   }
 

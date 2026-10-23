@@ -25,6 +25,8 @@ const {
   WG_POST_DOWN,
 } = require('../config');
 
+const FENCED_KEEPALIVE = 25;
+
 module.exports = class WireGuard {
 
   async __buildConfig() {
@@ -69,6 +71,7 @@ module.exports = class WireGuard {
 
       await this.__saveConfig(config);
       await Util.exec('wg-quick down wg0').catch(() => { });
+      await this.__syncFirewall(config);
       await Util.exec('wg-quick up wg0').catch((err) => {
         if (err && err.message && err.message.includes('Cannot find device "wg0"')) {
           throw new Error('WireGuard exited with the error: Cannot find device "wg0"\nThis usually means that your host\'s kernel does not support WireGuard!');
@@ -92,9 +95,56 @@ module.exports = class WireGuard {
     return this.__serialize(async () => {
       const config = await this.getConfig();
       await this.__saveConfig(config);
-      await this.__syncConfig();
-      await this.__syncRoutes(config);
+      await this.__applyConfig(config);
     });
+  }
+
+  async __applyConfig(config) {
+    await this.__syncFirewall(config);
+    await this.__syncConfig();
+    await this.__syncRoutes(config);
+  }
+
+  async __runAll(commands, what) {
+    const failures = [];
+    for (const cmd of commands) {
+      await Util.exec(cmd).catch((err) => failures.push(`${cmd}: ${err.message.trim()}`));
+    }
+
+    if (failures.length > 0) {
+      throw new ServerError(`Config saved, but failed to apply ${what}:\n${failures.join('\n')}`, 500);
+    }
+  }
+
+  async __syncFirewall(config) {
+    const sources = Object.values(config.clients)
+      .filter((client) => client.fenced)
+      .flatMap((client) => client.allowedIPs ?? [{ address: client.address, cidr: 32 }])
+      .map(({ address, cidr }) => `${Util.networkAddress(address, cidr)}/${cidr}`);
+
+    const rules = [
+      '*filter',
+      ':WG_EASY_FWD - [0:0]',
+      ':WG_EASY_IN - [0:0]',
+      ...sources.flatMap((src) => [
+        `-A WG_EASY_FWD -s ${src} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`,
+        `-A WG_EASY_FWD -s ${src} -j REJECT`,
+        `-A WG_EASY_IN -s ${src} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`,
+        `-A WG_EASY_IN -s ${src} -j REJECT`,
+      ]),
+      'COMMIT',
+    ].join('\n');
+
+    await Util.exec(`iptables-restore --noflush <<'EOF'\n${rules}\nEOF`, {
+      log: 'iptables-restore --noflush (WG_EASY_* chains)',
+    }).catch((err) => {
+      throw new ServerError(`Config saved, but failed to apply firewall rules:\n${err.message.trim()}`, 500);
+    });
+
+    await this.__runAll([
+      'iptables -C FORWARD -i wg0 -j WG_EASY_FWD 2>/dev/null || iptables -I FORWARD 1 -i wg0 -j WG_EASY_FWD',
+      'iptables -C INPUT -i wg0 -j WG_EASY_IN 2>/dev/null || iptables -I INPUT 1 -i wg0 -j WG_EASY_IN',
+    ], 'firewall hooks');
   }
 
   async __syncRoutes(config) {
@@ -116,19 +166,10 @@ module.exports = class WireGuard {
       .map((dst) => (dst.includes('/') ? dst : `${dst}/32`))
       .filter((dst) => !isWgSubnet(dst.split('/')[0]));
 
-    const commands = [
+    await this.__runAll([
       ...current.filter((dst) => !desired.has(dst)).map((dst) => `ip route del ${dst} dev wg0`),
       ...[...desired].map((dst) => `ip route replace ${dst} dev wg0`),
-    ];
-
-    const failures = [];
-    for (const cmd of commands) {
-      await Util.exec(cmd).catch((err) => failures.push(`${cmd}: ${err.message.trim()}`));
-    }
-
-    if (failures.length > 0) {
-      throw new ServerError(`Config saved, but failed to apply routes:\n${failures.join('\n')}`, 500);
-    }
+    ], 'routes');
   }
 
   __buildAllowedIPs(client, allowedIPs) {
@@ -185,7 +226,8 @@ module.exports = class WireGuard {
         || !Util.isValidIPv4(client.address)
         || !isKey(client.publicKey)
         || !isOptionalKey(client.privateKey)
-        || !isOptionalKey(client.preSharedKey)) {
+        || !isOptionalKey(client.preSharedKey)
+        || (client.fenced !== undefined && typeof client.fenced !== 'boolean')) {
         fail(`client ${clientId}`);
       }
       if (client.allowedIPs !== undefined) {
@@ -256,6 +298,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
       id: clientId,
       name: client.name,
       enabled: client.enabled,
+      fenced: client.fenced === true,
       address: client.address,
       publicKey: client.publicKey,
       createdAt: new Date(client.createdAt),
@@ -312,22 +355,33 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     return client;
   }
 
+  __fencedAllowedIPs(config) {
+    const wgSubnet = `${WG_DEFAULT_ADDRESS.replace('x', '0')}/24`;
+    const routed = Object.values(config.clients)
+      .filter((client) => !client.fenced)
+      .flatMap((client) => (client.allowedIPs ?? []).slice(1))
+      .map(({ address, cidr }) => `${address}/${cidr}`);
+
+    return [wgSubnet, ...routed].join(', ');
+  }
+
   async getClientConfiguration({ clientId }) {
     const config = await this.getConfig();
     const client = await this.getClient({ clientId });
+    const dns = client.fenced ? null : WG_DEFAULT_DNS;
 
     return `
 [Interface]
 PrivateKey = ${client.privateKey ? `${client.privateKey}` : 'REPLACE_ME'}
 Address = ${client.address}/24
-${WG_DEFAULT_DNS ? `DNS = ${WG_DEFAULT_DNS}\n` : ''}\
+${dns ? `DNS = ${dns}\n` : ''}\
 ${WG_MTU ? `MTU = ${WG_MTU}\n` : ''}\
 
 [Peer]
 PublicKey = ${config.server.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
-}AllowedIPs = ${WG_ALLOWED_IPS}
-PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
+}AllowedIPs = ${client.fenced ? this.__fencedAllowedIPs(config) : WG_ALLOWED_IPS}
+PersistentKeepalive = ${client.fenced ? FENCED_KEEPALIVE : WG_PERSISTENT_KEEPALIVE}
 Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   }
 
@@ -339,9 +393,12 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     });
   }
 
-  async createClient({ name }) {
+  async createClient({ name, fenced = false }) {
     if (!name) {
       throw new Error('Missing: Name');
+    }
+    if (typeof fenced !== 'boolean') {
+      throw new ServerError('Invalid fenced', 400);
     }
 
     const config = await this.getConfig();
@@ -383,6 +440,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
       allowedIPs: [{ type: 'ipv4', address, cidr: 32 }],
 
       enabled: true,
+      fenced,
     };
 
     config.clients[id] = client;
@@ -428,6 +486,19 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
   }
 
+  async updateClientFenced({ clientId, fenced }) {
+    const client = await this.getClient({ clientId });
+
+    if (typeof fenced !== 'boolean') {
+      throw new ServerError('Invalid fenced', 400);
+    }
+
+    client.fenced = fenced;
+    client.updatedAt = new Date();
+
+    await this.saveConfig();
+  }
+
   async updateClientAddress({ clientId, address }) {
     const config = await this.getConfig();
     const client = await this.getClient({ clientId });
@@ -449,11 +520,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
   }
 
-  async __reloadConfig() {
-    await this.__buildConfig();
-    await this.__syncConfig();
-  }
-
   async restoreConfiguration(config) {
     debug('Starting configuration restore process.');
     let _config;
@@ -465,8 +531,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     this.__validateConfig(_config);
     await this.__serialize(async () => {
       await this.__saveConfig(_config);
-      await this.__reloadConfig();
-      await this.__syncRoutes(_config);
+      await this.__applyConfig(await this.__buildConfig());
     });
     debug('Configuration restore process completed.');
   }

@@ -59,6 +59,7 @@ new Vue({
     clientDelete: null,
     clientCreate: null,
     clientCreateName: '',
+    clientCreateFenced: false,
     clientEditName: null,
     clientEditNameId: null,
     clientEditAddress: null,
@@ -270,7 +271,18 @@ new Vue({
       const name = this.clientCreateName;
       if (!name) return;
 
-      this.api.createClient({ name })
+      this.api.createClient({ name, fenced: this.clientCreateFenced })
+        .catch((err) => alert(err.message || err.toString()))
+        .finally(() => this.refresh().catch(console.error));
+    },
+    confirmCurrentDevice(client) {
+      return !client.isCurrent || window.confirm(i18n.t('currentDeviceWarning'));
+    },
+    toggleFenced(client) {
+      const fenced = !client.fenced;
+      if (fenced && !this.confirmCurrentDevice(client)) return;
+
+      this.api.updateClientFenced({ clientId: client.id, fenced })
         .catch((err) => alert(err.message || err.toString()))
         .finally(() => this.refresh().catch(console.error));
     },
@@ -285,6 +297,8 @@ new Vue({
         .finally(() => this.refresh().catch(console.error));
     },
     disableClient(client) {
+      if (!this.confirmCurrentDevice(client)) return;
+
       this.api.disableClient({ clientId: client.id })
         .catch((err) => alert(err.message || err.toString()))
         .finally(() => this.refresh().catch(console.error));
@@ -295,6 +309,8 @@ new Vue({
         .finally(() => this.refresh().catch(console.error));
     },
     updateClientAddress(client, address) {
+      if (address === client.address || !this.confirmCurrentDevice(client)) return;
+
       this.api.updateClientAddress({ clientId: client.id, address })
         .catch((err) => alert(err.message || err.toString()))
         .finally(() => this.refresh().catch(console.error));
