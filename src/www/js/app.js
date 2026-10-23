@@ -64,7 +64,7 @@ new Vue({
     clientEditNameId: null,
     clientEditAddress: null,
     clientEditAddressId: null,
-    clientEditAllowedIPs: null,
+    clientSettings: null,
     userInputIP: [0, 0, 0, 0, 0],
     qrcode: null,
 
@@ -278,28 +278,43 @@ new Vue({
     confirmCurrentDevice(client) {
       return !client.isCurrent || window.confirm(i18n.t('currentDeviceWarning'));
     },
-    toggleFenced(client) {
-      const fenced = !client.fenced;
-      if (fenced && !this.confirmCurrentDevice(client)) return;
+    openClientSettings(client) {
+      this.userInputIP = [0, 0, 0, 0, 0];
+      this.clientSettings = {
+        ...client,
+        allowedIPs: client.allowedIPs.map((ip) => ({ ...ip })),
+      };
+    },
+    async saveClientSettings() {
+      const draft = this.clientSettings;
+      const client = this.clients.find((item) => item.id === draft.id);
+      const clientId = draft.id;
+      if (!client) {
+        this.clientSettings = null;
+        return;
+      }
+      const cutsOff = (client.enabled && !draft.enabled) || (!client.fenced && draft.fenced);
+      if (cutsOff && !this.confirmCurrentDevice(client)) return;
 
-      this.api.updateClientFenced({ clientId: client.id, fenced })
-        .catch((err) => alert(err.message || err.toString()))
-        .finally(() => this.refresh().catch(console.error));
+      this.clientSettings = null;
+      const cidrs = (ips) => ips.map((ip) => `${ip.address}/${ip.cidr}`).join(',');
+      try {
+        if (cidrs(draft.allowedIPs) !== cidrs(client.allowedIPs)) {
+          await this.api.updateClientAllowedIPs({ clientId, allowedIPs: draft.allowedIPs });
+        }
+        if (draft.fenced !== client.fenced) {
+          await this.api.updateClientFenced({ clientId, fenced: draft.fenced });
+        }
+        if (draft.enabled !== client.enabled) {
+          await (draft.enabled ? this.api.enableClient({ clientId }) : this.api.disableClient({ clientId }));
+        }
+      } catch (err) {
+        alert(err.message || err.toString());
+      }
+      this.refresh().catch(console.error);
     },
     deleteClient(client) {
       this.api.deleteClient({ clientId: client.id })
-        .catch((err) => alert(err.message || err.toString()))
-        .finally(() => this.refresh().catch(console.error));
-    },
-    enableClient(client) {
-      this.api.enableClient({ clientId: client.id })
-        .catch((err) => alert(err.message || err.toString()))
-        .finally(() => this.refresh().catch(console.error));
-    },
-    disableClient(client) {
-      if (!this.confirmCurrentDevice(client)) return;
-
-      this.api.disableClient({ clientId: client.id })
         .catch((err) => alert(err.message || err.toString()))
         .finally(() => this.refresh().catch(console.error));
     },
@@ -352,11 +367,6 @@ new Vue({
     toggleCharts() {
       localStorage.setItem('uiShowCharts', this.uiShowCharts ? 1 : 0);
     },
-    updateClientAllowedIPs(client) {
-      this.api.updateClientAllowedIPs({ clientId: client.id, allowedIPs: client.allowedIPs })
-        .catch((err) => alert(err.message || err.toString()))
-        .finally(() => this.refresh().catch(console.error));
-    },
     copyConf(client) {
       this.api.getClientConf({ clientId: client.id })
         .then((conf) => {
@@ -378,16 +388,16 @@ new Vue({
         alert(i18n.t('InvalidIPv4address'));
         return;
       }
-      const allowedIPs = [...this.clientEditAllowedIPs.allowedIPs];
+      const allowedIPs = [...this.clientSettings.allowedIPs];
       const obj = { type: 'ipv4', address, cidr: this.userInputIP[4] };
       allowedIPs.push(obj);
-      this.clientEditAllowedIPs.allowedIPs = allowedIPs;
+      this.clientSettings.allowedIPs = allowedIPs;
       this.userInputIP = [0, 0, 0, 0, 0];
     },
     removeIP(index) {
-      const allowedIPs = [...this.clientEditAllowedIPs.allowedIPs];
+      const allowedIPs = [...this.clientSettings.allowedIPs];
       allowedIPs.splice(index, 1);
-      this.clientEditAllowedIPs.allowedIPs = allowedIPs;
+      this.clientSettings.allowedIPs = allowedIPs;
     },
   },
   filters: {

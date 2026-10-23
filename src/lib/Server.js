@@ -323,6 +323,7 @@ module.exports = class Server {
               return;
             }
 
+            setHeader(event, 'Cache-Control', 'no-cache');
             if (id.endsWith('.html')) setHeader(event, 'Content-Type', 'text/html');
             if (id.endsWith('.js')) setHeader(event, 'Content-Type', 'application/javascript');
             if (id.endsWith('.json')) setHeader(event, 'Content-Type', 'application/json');
