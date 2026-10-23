@@ -18,6 +18,7 @@ const {
   getRouterParam,
   toNodeListener,
   readBody,
+  send,
   setHeader,
   serveStatic,
 } = require('h3');
@@ -60,7 +61,15 @@ const isPasswordValid = (password) => {
 module.exports = class Server {
 
   constructor() {
-    const app = createApp();
+    const app = createApp({
+      onError: (error, event) => {
+        if (error.statusCode >= 500) {
+          // eslint-disable-next-line no-console
+          console.error(error.cause ?? error);
+        }
+        return send(event, JSON.stringify({ error: error.message }), 'application/json');
+      },
+    });
     this.app = app;
 
     app.use(fromNodeMiddleware(expressSession({
@@ -133,27 +142,24 @@ module.exports = class Server {
 
     // WireGuard
     app.use(
-      fromNodeMiddleware((req, res, next) => {
+      defineEventHandler((event) => {
+        const { req } = event.node;
         if (!requiresPassword || !req.url.startsWith('/api/')) {
-          return next();
+          return;
         }
 
         if (req.session && req.session.authenticated) {
-          return next();
+          return;
         }
 
-        if (req.url.startsWith('/api/') && req.headers['authorization']) {
+        if (req.headers['authorization']) {
           if (isPasswordValid(req.headers['authorization'])) {
-            return next();
+            return;
           }
-          return res.status(401).json({
-            error: 'Incorrect Password',
-          });
+          throw createError({ status: 401, message: 'Incorrect Password' });
         }
 
-        return res.status(401).json({
-          error: 'Not Logged In',
-        });
+        throw createError({ status: 401, message: 'Not Logged In' });
       }),
     );
 
@@ -286,7 +292,7 @@ module.exports = class Server {
       }));
 
     // Static assets
-    const publicDir = '/app/www';
+    const publicDir = resolve(__dirname, '..', 'www');
     app.use(
       defineEventHandler((event) => {
         return serveStatic(event, {

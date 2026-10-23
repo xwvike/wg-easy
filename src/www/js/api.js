@@ -29,7 +29,7 @@ class API {
     }
 
     if (!res.ok) {
-      throw new Error(data.error || res.statusText);
+      throw new Error(data?.error || res.statusText);
     }
 
     return data;

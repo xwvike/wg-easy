@@ -76,21 +76,25 @@ module.exports = class WireGuard {
 
         throw err;
       });
-      // await Util.exec(`iptables -t nat -A POSTROUTING -s ${WG_DEFAULT_ADDRESS.replace('x', '0')}/24 -o ' + WG_DEVICE + ' -j MASQUERADE`);
-      // await Util.exec('iptables -A INPUT -p udp -m udp --dport 51820 -j ACCEPT');
-      // await Util.exec('iptables -A FORWARD -i wg0 -j ACCEPT');
-      // await Util.exec('iptables -A FORWARD -o wg0 -j ACCEPT');
       await this.__syncConfig();
     }
 
     return this.__configPromise;
   }
 
+  __serialize(task) {
+    const result = (this.__queue ?? Promise.resolve()).then(() => task());
+    this.__queue = result.catch(() => {});
+    return result;
+  }
+
   async saveConfig() {
-    const config = await this.getConfig();
-    await this.__saveConfig(config);
-    await this.__syncConfig();
-    await this.__syncRoutes(config);
+    return this.__serialize(async () => {
+      const config = await this.getConfig();
+      await this.__saveConfig(config);
+      await this.__syncConfig();
+      await this.__syncRoutes(config);
+    });
   }
 
   async __syncRoutes(config) {
@@ -459,9 +463,11 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
       throw new ServerError(`Invalid configuration: ${err.message}`, 400);
     }
     this.__validateConfig(_config);
-    await this.__saveConfig(_config);
-    await this.__reloadConfig();
-    await this.__syncRoutes(_config);
+    await this.__serialize(async () => {
+      await this.__saveConfig(_config);
+      await this.__reloadConfig();
+      await this.__syncRoutes(_config);
+    });
     debug('Configuration restore process completed.');
   }
 
