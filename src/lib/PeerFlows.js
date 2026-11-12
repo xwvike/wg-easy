@@ -1,14 +1,17 @@
 'use strict';
 
-const fs = require('node:fs/promises');
+const fs = require('node:fs');
+const readline = require('node:readline');
 const debug = require('debug')('PeerFlows');
 
 const Util = require('./Util');
 
 const CONNTRACK_PATH = '/proc/net/nf_conntrack';
-const MAX_LINES = 200000;
+// bounds CPU/memory per sample when the table is huge (e.g. a peer opening many connections)
+const MAX_LINES = 50000;
 // a gap longer than this (e.g. modal closed) restarts the baseline instead of averaging
 const MAX_WINDOW_SEC = 5;
+const CLOSING_STATES = /\s(TIME_WAIT|CLOSE|CLOSE_WAIT|FIN_WAIT|LAST_ACK)\s/;
 
 /**
  * Parses one /proc/net/nf_conntrack line into its original and reply tuples.
@@ -60,6 +63,7 @@ function parseLine(line) {
     origPackets: tuples[0].packets || 0,
     replyPackets: tuples[1].packets || 0,
     unreplied: line.includes('[UNREPLIED]'),
+    closing: CLOSING_STATES.test(line),
   };
 }
 
@@ -74,6 +78,26 @@ module.exports = class PeerFlows {
   constructor() {
     this.prev = new Map();
     this.prevAt = 0;
+  }
+
+  static async readLines(file, max) {
+    const stream = fs.createReadStream(file, { encoding: 'utf8' });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    const lines = [];
+    let truncated = false;
+    try {
+      for await (const line of rl) {
+        if (lines.length >= max) {
+          truncated = true;
+          break;
+        }
+        lines.push(line);
+      }
+    } finally {
+      rl.close();
+      stream.destroy();
+    }
+    return { lines, truncated };
   }
 
   static __ownerOf(ip, clients) {
@@ -93,9 +117,10 @@ module.exports = class PeerFlows {
    * @param {Array<{id: string, address: string, allowedIPs?: Array}>} clients
    */
   async sample(clients) {
-    let raw;
+    let lines;
+    let truncated;
     try {
-      raw = await fs.readFile(CONNTRACK_PATH, 'utf8');
+      ({ lines, truncated } = await PeerFlows.readLines(CONNTRACK_PATH, MAX_LINES));
     } catch (err) {
       debug(`conntrack unavailable: ${err.message}`);
       return { supported: false, accounting: false, flows: [] };
@@ -113,9 +138,8 @@ module.exports = class PeerFlows {
     const next = new Map();
     const pairs = new Map();
     let accounting = false;
-    const lines = raw.split('\n');
 
-    for (let i = 0; i < lines.length && i < MAX_LINES; i += 1) {
+    for (let i = 0; i < lines.length; i += 1) {
       const entry = parseLine(lines[i]);
       if (!entry) continue;
       const from = ownerOf(entry.src);
@@ -133,7 +157,7 @@ module.exports = class PeerFlows {
         });
       }
       const pair = pairs.get(pairKey);
-      if (!entry.unreplied) pair.connections += 1;
+      if (!entry.unreplied && !entry.closing) pair.connections += 1;
 
       if (hasBytes) {
         const cur = {
@@ -175,7 +199,9 @@ module.exports = class PeerFlows {
         connections: pair.connections,
       }));
 
-    return { supported: true, accounting, flows };
+    return {
+      supported: true, accounting, truncated, flows,
+    };
   }
 
 };
