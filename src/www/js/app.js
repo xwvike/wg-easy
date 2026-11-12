@@ -72,8 +72,8 @@ new Vue({
     latestRelease: null,
 
     uiTrafficStats: false,
-    uiView: localStorage.getItem('uiView') || 'traffic',
-    trafficFocusId: null,
+    trafficModalClient: null,
+    trafficPreviewTimer: null,
 
     uiChartType: 0,
     uiShowCharts: localStorage.getItem('uiShowCharts') === '1',
@@ -171,13 +171,34 @@ new Vue({
         minute: 'numeric',
       }).format(value);
     },
-    setView(view) {
-      this.uiView = view;
-      localStorage.setItem('uiView', view);
-    },
     isClientOnline(client) {
       if (!client || !client.enabled || !client.latestHandshakeAt) return false;
       return (Date.now() - new Date(client.latestHandshakeAt).getTime()) < 180000;
+    },
+    openTrafficTopology(client) {
+      if (this.trafficPreviewTimer) {
+        clearTimeout(this.trafficPreviewTimer);
+        this.trafficPreviewTimer = null;
+      }
+      this.trafficModalClient = client;
+    },
+    previewTrafficTopology(client) {
+      if (this.trafficModalClient) return;
+      if (this.trafficPreviewTimer) clearTimeout(this.trafficPreviewTimer);
+      this.trafficPreviewTimer = setTimeout(() => {
+        this.trafficModalClient = client;
+        this.trafficPreviewTimer = null;
+      }, 350);
+    },
+    cancelTrafficTopologyPreview() {
+      if (this.trafficPreviewTimer) {
+        clearTimeout(this.trafficPreviewTimer);
+        this.trafficPreviewTimer = null;
+      }
+    },
+    closeTrafficTopology() {
+      this.cancelTrafficTopologyPreview();
+      this.trafficModalClient = null;
     },
     async refresh({
       updateCharts = false,
@@ -240,6 +261,11 @@ new Vue({
 
         return client;
       });
+
+      if (this.trafficModalClient) {
+        const live = this.clients.find((c) => c.id === this.trafficModalClient.id);
+        this.trafficModalClient = live || null;
+      }
     },
     login(e) {
       e.preventDefault();
@@ -513,50 +539,42 @@ new Vue({
       }
       return this.uiTheme;
     },
-    trafficClients() {
-      return (this.clients || []).slice().sort((a, b) => {
-        const ar = Math.max(0, a.transferRxCurrent || 0) + Math.max(0, a.transferTxCurrent || 0);
-        const br = Math.max(0, b.transferRxCurrent || 0) + Math.max(0, b.transferTxCurrent || 0);
-        return br - ar;
-      });
-    },
-    trafficTotalRate() {
-      return (this.clients || []).reduce((sum, client) => {
-        return sum
-          + Math.max(0, client.transferRxCurrent || 0)
-          + Math.max(0, client.transferTxCurrent || 0);
-      }, 0);
-    },
-    topologyLayout() {
-      const clients = this.clients || [];
-      const cx = 400;
-      const cy = 230;
-      const rx = 290;
-      const ry = 155;
-      const rates = clients.map((client) => (
-        Math.max(0, client.transferRxCurrent || 0) + Math.max(0, client.transferTxCurrent || 0)
-      ));
-      const maxRate = Math.max(1, ...rates, 1);
-      const nodes = clients.map((client, index) => {
-        const angle = clients.length === 0
-          ? 0
-          : ((index / clients.length) * Math.PI * 2) - (Math.PI / 2);
-        const rate = rates[index];
-        const rateNorm = Math.min(1, rate / maxRate);
-        return {
-          id: client.id,
-          name: client.name,
-          x: cx + (Math.cos(angle) * rx),
-          y: cy + (Math.sin(angle) * ry),
-          rate,
-          rateNorm,
-          online: this.isClientOnline(client),
-          particleCount: rate > 0 ? Math.max(1, Math.round(1 + (rateNorm * 3))) : 0,
-          duration: Number((3.8 - (rateNorm * 2.4)).toFixed(2)),
-        };
-      });
+    trafficTopology() {
+      if (!this.trafficModalClient) return null;
+      const live = (this.clients || []).find((c) => c.id === this.trafficModalClient.id)
+        || this.trafficModalClient;
+      // WG dump: rx = from peer (upload), tx = to peer (download)
+      const up = Math.max(0, live.transferRxCurrent || 0);
+      const down = Math.max(0, live.transferTxCurrent || 0);
+      const maxRate = Math.max(1, up, down);
+      const upNorm = Math.min(1, up / maxRate);
+      const downNorm = Math.min(1, down / maxRate);
+      const clientX = 110;
+      const clientY = 150;
+      const cx = 360;
+      const cy = 150;
+      const netX = 610;
+      const netY = 150;
+      // Through-relay paths: device → VPN → outside, and the reverse
+      const upPath = `M ${clientX} ${clientY} Q ${(clientX + cx) / 2} ${cy - 70} ${cx} ${cy} Q ${(cx + netX) / 2} ${cy - 70} ${netX} ${netY}`;
+      const downPath = `M ${netX} ${netY} Q ${(cx + netX) / 2} ${cy + 70} ${cx} ${cy} Q ${(clientX + cx) / 2} ${cy + 70} ${clientX} ${clientY}`;
       return {
-        cx, cy, nodes, maxRate,
+        clientX,
+        clientY,
+        cx,
+        cy,
+        netX,
+        netY,
+        up,
+        down,
+        upNorm,
+        downNorm,
+        upPath,
+        downPath,
+        upParticles: up > 0 ? Math.max(1, Math.round(1 + (upNorm * 3))) : 0,
+        downParticles: down > 0 ? Math.max(1, Math.round(1 + (downNorm * 3))) : 0,
+        upDur: Number((3.6 - (upNorm * 2.2)).toFixed(2)),
+        downDur: Number((3.6 - (downNorm * 2.2)).toFixed(2)),
       };
     },
   },
