@@ -99,6 +99,13 @@ class API {
     })));
   }
 
+  async getPeerFlows() {
+    return this.call({
+      method: 'get',
+      path: '/wireguard/traffic/peers',
+    });
+  }
+
   async createClient({ name, fenced }) {
     return this.call({
       method: 'post',

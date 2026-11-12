@@ -8,6 +8,7 @@ const QRCode = require('qrcode');
 
 const Util = require('./Util');
 const ServerError = require('./ServerError');
+const PeerFlows = require('./PeerFlows');
 
 const {
   WG_PATH,
@@ -419,6 +420,40 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     debug('Config syncing...');
     await Util.exec('wg syncconf wg0 <(wg-quick strip wg0)');
     debug('Config synced.');
+  }
+
+  __getDemoPeerFlows(clients) {
+    const byName = new Map(clients.map((client) => [client.name, client.id]));
+    const t = (Date.now() - this.__demoStartedAt) / 1000;
+    const wave = (period) => (Math.sin((t / period) * Math.PI * 2) + 1) / 2;
+    const flows = [
+      ['Laptop', 'NAS', 320000, 1500000 * wave(13)],
+      ['Office-PC', 'NAS', 450000, 60000],
+      ['Phone', 'TV', 900000 * wave(9), 25000],
+      ['Tablet', 'Laptop', 18000, 6000],
+    ];
+    return {
+      supported: true,
+      accounting: true,
+      flows: flows
+        .filter(([a, b]) => byName.has(a) && byName.has(b))
+        .map(([a, b, ab, ba]) => ({
+          a: byName.get(a),
+          b: byName.get(b),
+          ab: Math.round(ab),
+          ba: Math.round(ba),
+          connections: 1,
+        })),
+    };
+  }
+
+  async getPeerFlows() {
+    const clients = await this.getClients();
+    if (DEMO_TRAFFIC) {
+      return this.__getDemoPeerFlows(clients);
+    }
+    if (!this.__peerFlows) this.__peerFlows = new PeerFlows();
+    return this.__peerFlows.sample(clients);
   }
 
   async getClients() {
