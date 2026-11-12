@@ -243,8 +243,9 @@ class TrafficTopologyChart {
       .merge(chordSel)
       .attr('d', (l) => l.path)
       .attr('stroke', (l) => l.color)
-      .attr('stroke-opacity', accounting ? 0.28 : 0.6)
-      .attr('stroke-width', (l) => (accounting ? widthFor(l.rate) : 1.5));
+      .attr('stroke-opacity', (l) => (accounting && l.rate > 0 ? 0.28 : 0.45))
+      .attr('stroke-width', (l) => (accounting && l.rate > 0 ? widthFor(l.rate) : 1.25))
+      .attr('stroke-dasharray', (l) => (accounting && l.rate > 0 ? null : '2 4'));
 
     const prev = this.lanes;
     this.lanes = new Map();
