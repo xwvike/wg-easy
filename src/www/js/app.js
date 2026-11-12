@@ -171,10 +171,6 @@ new Vue({
         minute: 'numeric',
       }).format(value);
     },
-    isClientOnline(client) {
-      if (!client || !client.enabled || !client.latestHandshakeAt) return false;
-      return (Date.now() - new Date(client.latestHandshakeAt).getTime()) < 180000;
-    },
     openTrafficTopology() {
       this.trafficModalOpen = true;
       this.$nextTick(() => this.mountTrafficTopology());
