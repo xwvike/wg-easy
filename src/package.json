@@ -8,7 +8,7 @@
   "main": "server.js",
   "scripts": {
     "serve": "DEBUG=Server,WireGuard npx nodemon server.js",
-    "serve-with-password": "PASSWORD=wg npm run serve",
+    "serve-with-password": "PASSWORD_HASH='$2y$10$hBCoykrB95WSzuV4fafBzOHWKu9sbyVa34GJr8VV5R/pIelfEMYyG' SESSION_SECRET=dev npm run serve",
     "lint": "eslint .",
     "buildcss": "npx tailwindcss -i ./www/src/css/app.css -o ./www/css/app.css"
   },

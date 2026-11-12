@@ -78,7 +78,7 @@ To automatically install & run wg-easy, simply run:
 
 > 💡 Replace `YOUR_SERVER_IP` with your WAN IP, or a Dynamic DNS hostname.
 >
-> 💡 Replace `YOUR_ADMIN_PASSWORD_HASH` with a bcrypt password hash to log in on the Web UI. See [How_to_generate_an_bcrypt_hash.md](./How_to_generate_an_bcrypt_hash.md) for know how generate the hash.
+> 💡 `PASSWORD_HASH` is **required** — the container will not start without it. Replace `YOUR_ADMIN_PASSWORD_HASH` with a bcrypt hash. See [How_to_generate_an_bcrypt_hash.md](./How_to_generate_an_bcrypt_hash.md).
 
 The Web UI will now be available on `http://0.0.0.0:51821`.
 
@@ -100,7 +100,14 @@ These options can be configured by setting environment variables using `-e KEY="
 | - | - | - |------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `PORT` | `51821` | `6789` | TCP port for Web UI.                                                                                                                                 |
 | `WEBUI_HOST` | `0.0.0.0` | `localhost` | IP address web UI binds to.                                                                                                                          |
-| `PASSWORD_HASH` | - | `$2y$05$Ci...` | When set, requires a password when logging in to the Web UI. See [How to generate an bcrypt hash.md]("https://github.com/xwvike/wg-easy/blob/v14/How_to_generate_an_bcrypt_hash.md") for know how generate the hash. |
+| `PASSWORD_HASH` | - | `$2y$05$Ci...` | **Required.** bcrypt password hash for Web UI / API login. The process refuses to start without it. See [How_to_generate_an_bcrypt_hash.md](./How_to_generate_an_bcrypt_hash.md). |
+| `SESSION_SECRET` | random | `long-random-string` | Signs the session cookie. Set this so sessions survive restarts. |
+| `SESSION_MAX_AGE` | `43200000` | `86400000` | Session lifetime in milliseconds (default 12h). |
+| `SECURE_COOKIE` | `auto` | `true` | Cookie `Secure` flag: `true`, `false`, or `auto` (set when the request is HTTPS). |
+| `TRUST_PROXY` | `false` | `true` | Trust `X-Forwarded-*` (client IP + HTTPS detection). Enable only behind a trusted reverse proxy. |
+| `LOGIN_MAX_ATTEMPTS` | `5` | `10` | Failed login / `Authorization` attempts before temporary lockout. |
+| `LOGIN_WINDOW_MS` | `900000` | `600000` | Sliding window for counting failures (ms). |
+| `LOGIN_LOCKOUT_MS` | `900000` | `1800000` | Lockout duration after too many failures (ms). |
 | `WG_HOST` | - | `vpn.myserver.com` | The public hostname of your VPN server.                                                                                                              |
 | `WG_DEVICE` | `eth0` | `ens6f0` | Ethernet device the wireguard traffic should be forwarded through.                                                                                   |
 | `WG_PORT` | `51820` | `12345` | The public UDP port of your VPN server. WireGuard will listen on that (othwise default) inside the Docker container.                                 |

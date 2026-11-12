@@ -76,7 +76,7 @@ exit
 
 > 💡 将 `YOUR_SERVER_IP` 替换为你的 WAN IP，或动态 DNS 主机名。
 >
-> 💡 将 `YOUR_ADMIN_PASSWORD_HASH` 替换为用于登录 Web UI 的 bcrypt 密码哈希。参阅 [How_to_generate_an_bcrypt_hash.md](./How_to_generate_an_bcrypt_hash.md) 了解如何生成该哈希值。
+> 💡 `PASSWORD_HASH` **必填**——未设置时容器会拒绝启动。将 `YOUR_ADMIN_PASSWORD_HASH` 替换为 bcrypt 哈希。参阅 [How_to_generate_an_bcrypt_hash.zh.md](./How_to_generate_an_bcrypt_hash.zh.md)。
 
 Web UI 将可通过 `http://0.0.0.0:51821` 访问。
 
@@ -98,7 +98,14 @@ WireGuard Easy 也可以通过 Docker Compose 启动 —— 直接下载
 | - | - | - |------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `PORT` | `51821` | `6789` | Web UI 的 TCP 端口。                                                                                                                                 |
 | `WEBUI_HOST` | `0.0.0.0` | `localhost` | Web UI 绑定的 IP 地址。                                                                                                                          |
-| `PASSWORD_HASH` | - | `$2y$05$Ci...` | 设置后，登录 Web UI 时需要密码。参阅 [How to generate an bcrypt hash.md]("https://github.com/xwvike/wg-easy/blob/v14/How_to_generate_an_bcrypt_hash.md") 了解如何生成该哈希。 |
+| `PASSWORD_HASH` | - | `$2y$05$Ci...` | **必填。** Web UI / API 登录用的 bcrypt 密码哈希；未设置时进程拒绝启动。参阅 [How_to_generate_an_bcrypt_hash.zh.md](./How_to_generate_an_bcrypt_hash.zh.md)。 |
+| `SESSION_SECRET` | 随机 | `long-random-string` | 用于签名会话 Cookie。设置后会话可在重启后保持。 |
+| `SESSION_MAX_AGE` | `43200000` | `86400000` | 会话有效期（毫秒，默认 12 小时）。 |
+| `SECURE_COOKIE` | `auto` | `true` | Cookie `Secure`：`true`、`false` 或 `auto`（HTTPS 请求时自动开启）。 |
+| `TRUST_PROXY` | `false` | `true` | 信任 `X-Forwarded-*`（客户端 IP 与 HTTPS 检测）。仅在可信反向代理后启用。 |
+| `LOGIN_MAX_ATTEMPTS` | `5` | `10` | 登录 / `Authorization` 失败次数上限，超出后临时锁定。 |
+| `LOGIN_WINDOW_MS` | `900000` | `600000` | 统计失败次数的滑动窗口（毫秒）。 |
+| `LOGIN_LOCKOUT_MS` | `900000` | `1800000` | 锁定时长（毫秒）。 |
 | `WG_HOST` | - | `vpn.myserver.com` | VPN 服务器的公共主机名。                                                                                                              |
 | `WG_DEVICE` | `eth0` | `ens6f0` | WireGuard 流量应通过的以太网设备。                                                                                   |
 | `WG_PORT` | `51820` | `12345` | VPN 服务器的公共 UDP 端口。WireGuard 会在容器内监听此端口（否则使用默认值）。                                 |
