@@ -94,7 +94,7 @@ class TrafficTopologyChart {
 
   /**
    * @param {Array<object>} clients
-   * @param {{accounting: boolean, flows: Array<{a: string, b: string, ab: number, ba: number}>}|null} peers
+   * @param {{accounting: boolean, flows: Array<{a: string, b: string, ab: number, ba: number}>, devices?: object}|null} peers
    */
   update(clients, peers) {
     const c = this.palette();
@@ -140,6 +140,17 @@ class TrafficTopologyChart {
       byId.get(f.b).peerIn += f.ab;
     });
 
+    const serverOther = accounting && peers.devices ? peers.devices : null;
+    devices.forEach((d) => {
+      const other = serverOther && serverOther[d.id];
+      d.otherUp = other ? other.otherUp : Math.max(0, d.up - d.peerOut);
+      d.otherDown = other ? other.otherDown : Math.max(0, d.down - d.peerIn);
+      if (!d.online) {
+        d.otherUp = 0;
+        d.otherDown = 0;
+      }
+    });
+
     const lanes = [];
     devices.forEach((d) => {
       const p = [d.x, d.y];
@@ -153,7 +164,7 @@ class TrafficTopologyChart {
         id: `su:${d.id}`,
         group: 'spoke',
         owners: [d.id],
-        rate: Math.max(0, d.up - d.peerOut),
+        rate: d.otherUp,
         color: d.color,
         online: d.online,
         path: TrafficTopologyChart.quad(start, [mid[0] - uy * bend, mid[1] + ux * bend], end),
@@ -162,7 +173,7 @@ class TrafficTopologyChart {
         id: `sd:${d.id}`,
         group: 'spoke',
         owners: [d.id],
-        rate: Math.max(0, d.down - d.peerIn),
+        rate: d.otherDown,
         color: c.spokeDot,
         online: d.online,
         path: TrafficTopologyChart.quad(end, [mid[0] + uy * bend, mid[1] - ux * bend], start),
