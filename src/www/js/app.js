@@ -190,9 +190,8 @@ new Vue({
         this.trafficChart = null;
       }
       this.trafficChart = new TrafficTopologyChart(el, {
-        width: Math.max(640, el.clientWidth || 840),
-        height: 460,
         dark: this.theme === 'dark',
+        outsideLabel: this.$t('trafficOutside'),
         formatRate: (n) => bytes(Math.max(0, n || 0)),
       });
       this.trafficChart.update(this.clients || []);

@@ -3,24 +3,25 @@
 'use strict';
 
 /**
- * D3 traffic topology: all devices ↔ VPN relay ↔ outside.
- * Particle density on each hop follows live throughput.
+ * Relay topology: devices (left) ⇄ VPN (center) ⇄ Internet (right).
+ * Each hop has an upload lane and a download lane; particles move at a
+ * constant speed, so their spacing (density) reflects throughput.
  */
 class TrafficTopologyChart {
 
   constructor(container, {
-    width = 840,
-    height = 460,
     formatRate = (n) => `${n}`,
     dark = false,
+    outsideLabel = 'Internet',
   } = {}) {
     this.container = container;
-    this.width = width;
-    this.height = height;
     this.formatRate = formatRate;
+    this.outsideLabel = outsideLabel;
     this.dark = dark;
-    this.particles = [];
-    this.paths = new Map();
+    this.width = 900;
+    this.height = 400;
+    this.lanes = new Map();
+    this.hoverId = null;
     this.raf = null;
     this.lastTs = 0;
 
@@ -28,27 +29,12 @@ class TrafficTopologyChart {
 
     this.svg = d3.select(container)
       .append('svg')
-      .attr('viewBox', `0 0 ${width} ${height}`)
-      .attr('class', 'w-full h-auto block select-none')
+      .attr('class', 'traffic-topo-svg')
       .attr('role', 'img');
 
-    const defs = this.svg.append('defs');
-    const mkGrad = (id, c) => {
-      const g = defs.append('linearGradient').attr('id', id)
-        .attr('x1', '0%').attr('y1', '0%')
-        .attr('x2', '100%')
-        .attr('y2', '0%');
-      g.append('stop').attr('offset', '0%').attr('stop-color', c).attr('stop-opacity', 0.15);
-      g.append('stop').attr('offset', '50%').attr('stop-color', c).attr('stop-opacity', 0.9);
-      g.append('stop').attr('offset', '100%').attr('stop-color', c).attr('stop-opacity', 0.15);
-    };
-    mkGrad('topo-up', '#b91c1c');
-    mkGrad('topo-down', '#f87171');
-
-    this.gLinks = this.svg.append('g').attr('class', 'topo-links');
-    this.gParticles = this.svg.append('g').attr('class', 'topo-particles');
-    this.gNodes = this.svg.append('g').attr('class', 'topo-nodes');
-    this.gLabels = this.svg.append('g').attr('class', 'topo-labels');
+    this.gLinks = this.svg.append('g');
+    this.gDots = this.svg.append('g');
+    this.gNodes = this.svg.append('g');
 
     this.tick = this.tick.bind(this);
     this.raf = requestAnimationFrame(this.tick);
@@ -62,279 +48,306 @@ class TrafficTopologyChart {
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = null;
     d3.select(this.container).selectAll('*').remove();
-    this.particles = [];
-    this.paths.clear();
+    this.lanes.clear();
+  }
+
+  palette() {
+    return this.dark
+      ? {
+        up: '#f87171',
+        down: '#fbbf24',
+        track: '#525252',
+        node: '#404040',
+        nodeStroke: '#737373',
+        text: '#e5e5e5',
+        muted: '#a3a3a3',
+        offline: '#525252',
+        hub: '#b91c1c',
+        bg: '#404040',
+      }
+      : {
+        up: '#dc2626',
+        down: '#d97706',
+        track: '#e5e7eb',
+        node: '#ffffff',
+        nodeStroke: '#d1d5db',
+        text: '#1f2937',
+        muted: '#9ca3af',
+        offline: '#d1d5db',
+        hub: '#991b1b',
+        bg: '#ffffff',
+      };
   }
 
   /**
-   * @param {Array<{id:string,name:string,enabled:boolean,latestHandshakeAt:Date|null,transferRxCurrent:number,transferTxCurrent:number}>} clients
+   * @param {Array<object>} clients
    */
   update(clients) {
-    const list = (clients || []).slice();
-    const hub = { x: this.width * 0.52, y: this.height * 0.5 };
-    const net = { x: this.width * 0.88, y: this.height * 0.5 };
-    const arcCx = this.width * 0.28;
-    const arcCy = this.height * 0.5;
-    const radius = Math.min(this.width * 0.22, this.height * 0.38);
+    const c = this.palette();
+    const list = clients || [];
+    const rowGap = 56;
+    const top = 44;
+    this.height = Math.max(320, top * 2 + Math.max(list.length - 1, 0) * rowGap);
+    this.svg.attr('viewBox', `0 0 ${this.width} ${this.height}`);
 
-    const devices = list.map((client, index) => {
-      const n = Math.max(list.length, 1);
-      const angle = n === 1
-        ? Math.PI
-        : Math.PI * 0.65 + ((index / (n - 1)) * Math.PI * 0.7);
+    const midY = this.height / 2;
+    const devX = 230;
+    const hub = { x: 560, y: midY };
+    const net = { x: 800, y: midY };
+
+    const devices = list.map((client, i) => {
+      const up = Math.max(0, client.transferRxCurrent || 0);
+      const down = Math.max(0, client.transferTxCurrent || 0);
+      const online = !!(client.enabled && client.latestHandshakeAt
+        && (Date.now() - new Date(client.latestHandshakeAt).getTime()) < 180000);
       return {
-        ...client,
-        x: arcCx + (Math.cos(angle) * radius),
-        y: arcCy + (Math.sin(angle) * radius),
-        up: Math.max(0, client.transferRxCurrent || 0),
-        down: Math.max(0, client.transferTxCurrent || 0),
-        online: !!(client.enabled && client.latestHandshakeAt
-          && (Date.now() - new Date(client.latestHandshakeAt).getTime()) < 180000),
+        id: client.id,
+        name: client.name,
+        address: client.address,
+        x: devX,
+        y: list.length === 1 ? midY : top + i * rowGap,
+        up: online ? up : 0,
+        down: online ? down : 0,
+        online,
       };
     });
 
-    const maxRate = Math.max(
-      1,
-      ...devices.map((d) => d.up),
-      ...devices.map((d) => d.down),
-    );
+    const totalUp = d3.sum(devices, (d) => d.up);
+    const totalDown = d3.sum(devices, (d) => d.down);
+    const maxRate = Math.max(1, totalUp, totalDown);
+    // particle spacing in px: busiest lane ≈ 7px apart, any non-zero flow ≤ 90px apart
+    const spacing = d3.scaleSqrt().domain([0, maxRate]).range([90, 7])
+      .clamp(true);
+    const countFor = (rate, length) => (rate > 0
+      ? Math.max(1, Math.round(length / spacing(rate)))
+      : 0);
+    const widthFor = d3.scaleSqrt().domain([0, maxRate]).range([1.25, 4])
+      .clamp(true);
 
-    // Build path descriptors: device→hub and hub→net (up), net→hub and hub→device (down)
-    const links = [];
+    const link = (x0, y0, x1, y1) => {
+      const mx = (x0 + x1) / 2;
+      return `M${x0},${y0} C${mx},${y0} ${mx},${y1} ${x1},${y1}`;
+    };
+
+    const lanes = [];
     devices.forEach((d) => {
-      const upNorm = Math.min(1, d.up / maxRate);
-      const downNorm = Math.min(1, d.down / maxRate);
-      links.push({
-        id: `up-dev-${d.id}`,
+      lanes.push({
+        id: `u:${d.id}`,
+        owner: d.id,
         kind: 'up',
-        d: this.curve(d.x, d.y, hub.x, hub.y, -1),
         rate: d.up,
-        norm: upNorm,
-        active: d.online && d.up > 0,
-      });
-      links.push({
-        id: `up-net-${d.id}`,
-        kind: 'up',
-        d: this.curve(hub.x, hub.y, net.x, net.y, -1),
-        rate: d.up,
-        norm: upNorm,
-        active: d.online && d.up > 0,
-      });
-      links.push({
-        id: `down-net-${d.id}`,
-        kind: 'down',
-        d: this.curve(net.x, net.y, hub.x, hub.y, 1),
-        rate: d.down,
-        norm: downNorm,
-        active: d.online && d.down > 0,
-      });
-      links.push({
-        id: `down-dev-${d.id}`,
-        kind: 'down',
-        d: this.curve(hub.x, hub.y, d.x, d.y, 1),
-        rate: d.down,
-        norm: downNorm,
-        active: d.online && d.down > 0,
-      });
-    });
-
-    // Aggregate hub↔net stroke by total through traffic for visual clarity
-    const totalUp = devices.reduce((s, d) => s + (d.online ? d.up : 0), 0);
-    const totalDown = devices.reduce((s, d) => s + (d.online ? d.down : 0), 0);
-
-    const linkSel = this.gLinks.selectAll('path.topo-link')
-      .data(links, (d) => d.id);
-
-    linkSel.exit().remove();
-
-    const linkEnter = linkSel.enter().append('path')
-      .attr('class', 'topo-link')
-      .attr('fill', 'none')
-      .attr('stroke-linecap', 'round');
-
-    linkEnter.merge(linkSel)
-      .attr('d', (d) => d.d)
-      .attr('stroke', (d) => (d.kind === 'up' ? 'url(#topo-up)' : 'url(#topo-down)'))
-      .attr('stroke-width', (d) => (d.active ? 1.2 + (d.norm * 5) : 1))
-      .attr('opacity', (d) => (d.active ? 0.35 + (d.norm * 0.5) : 0.1));
-
-    // Cache path lengths for particles
-    this.paths.clear();
-    this.gLinks.selectAll('path.topo-link').each((d, i, nodes) => {
-      const el = nodes[i];
-      this.paths.set(d.id, {
-        el,
-        length: el.getTotalLength(),
-        rate: d.rate,
-        norm: d.norm,
-        active: d.active,
-        kind: d.kind,
-      });
-    });
-
-    this.syncParticles();
-
-    // Nodes
-    const nodeData = [
-      ...devices.map((d) => ({
-        key: `dev-${d.id}`,
-        type: 'device',
-        x: d.x,
-        y: d.y,
-        label: d.name,
         online: d.online,
-        sub: this.formatRate(d.up + d.down),
-      })),
-      {
-        key: 'hub',
-        type: 'hub',
-        x: hub.x,
-        y: hub.y,
-        label: 'VPN',
-        online: true,
-        sub: this.formatRate(totalUp + totalDown),
-      },
-      {
-        key: 'net',
-        type: 'net',
-        x: net.x,
-        y: net.y,
-        label: 'NET',
-        online: true,
-        sub: this.formatRate(totalUp + totalDown),
-      },
-    ];
-
-    const nodeSel = this.gNodes.selectAll('g.topo-node')
-      .data(nodeData, (d) => d.key);
-
-    nodeSel.exit().remove();
-
-    const nodeEnter = nodeSel.enter().append('g').attr('class', 'topo-node');
-    nodeEnter.append('circle').attr('class', 'topo-node-halo').attr('r', 28).attr('opacity', 0.25);
-    nodeEnter.append('circle').attr('class', 'topo-node-core').attr('r', 20);
-    nodeEnter.append('text').attr('class', 'topo-node-title')
-      .attr('text-anchor', 'middle').attr('dy', 5)
-      .attr('font-size', 11)
-      .attr('font-weight', 600);
-    nodeEnter.append('text').attr('class', 'topo-node-label')
-      .attr('text-anchor', 'middle').attr('dy', 40)
-      .attr('font-size', 12);
-    nodeEnter.append('text').attr('class', 'topo-node-rate')
-      .attr('text-anchor', 'middle').attr('dy', 54)
-      .attr('font-size', 10)
-      .attr('font-family', 'ui-monospace, monospace');
-
-    const merged = nodeEnter.merge(nodeSel)
-      .attr('transform', (d) => `translate(${d.x},${d.y})`);
-
-    merged.select('.topo-node-halo')
-      .attr('fill', (d) => {
-        if (d.type === 'hub') return '#991b1b';
-        if (d.type === 'net') return '#6b7280';
-        return '#374151';
-      })
-      .attr('opacity', (d) => (d.type === 'hub' ? 0.3 : 0));
-
-    merged.select('.topo-node-core')
-      .attr('fill', (d) => {
-        if (d.type === 'hub') return '#991b1b';
-        if (d.type === 'net') return this.dark ? '#737373' : '#6b7280';
-        if (!d.online) return this.dark ? '#525252' : '#d1d5db';
-        return this.dark ? '#e5e5e5' : '#374151';
+        path: link(d.x, d.y - 4, hub.x, hub.y - 4),
       });
-
-    merged.select('.topo-node-title')
-      .attr('fill', (d) => {
-        if (d.type === 'hub' || d.type === 'net') return '#fff';
-        if (!d.online) return this.dark ? '#a3a3a3' : '#6b7280';
-        return this.dark ? '#171717' : '#fff';
-      })
-      .text((d) => (d.type === 'device' ? 'DEV' : d.label));
-
-    merged.select('.topo-node-label')
-      .attr('fill', this.dark ? '#d4d4d4' : '#4b5563')
-      .text((d) => {
-        if (d.type === 'device') return d.label;
-        if (d.type === 'hub') return 'Relay';
-        return 'Outside';
+      lanes.push({
+        id: `d:${d.id}`,
+        owner: d.id,
+        kind: 'down',
+        rate: d.down,
+        online: d.online,
+        path: link(hub.x, hub.y + 4, d.x, d.y + 4),
       });
+    });
+    lanes.push({
+      id: 'u:net',
+      owner: null,
+      kind: 'up',
+      rate: totalUp,
+      online: true,
+      path: link(hub.x, hub.y - 6, net.x, net.y - 6),
+    });
+    lanes.push({
+      id: 'd:net',
+      owner: null,
+      kind: 'down',
+      rate: totalDown,
+      online: true,
+      path: link(net.x, net.y + 6, hub.x, hub.y + 6),
+    });
 
-    merged.select('.topo-node-rate')
-      .attr('fill', this.dark ? '#a3a3a3' : '#9ca3af')
-      .text((d) => `${d.sub}/s`);
-  }
+    const linkSel = this.gLinks.selectAll('path').data(lanes, (l) => l.id);
+    linkSel.exit().remove();
+    const linkAll = linkSel.enter().append('path')
+      .attr('fill', 'none')
+      .attr('stroke-linecap', 'round')
+      .merge(linkSel)
+      .attr('d', (l) => l.path)
+      .attr('stroke', (l) => (l.rate > 0 ? c[l.kind] : c.track))
+      .attr('stroke-opacity', (l) => (l.rate > 0 ? 0.22 : 1))
+      .attr('stroke-width', (l) => (l.rate > 0 ? widthFor(l.rate) : 1))
+      .attr('stroke-dasharray', (l) => (l.online ? null : '3 4'));
 
-  curve(x1, y1, x2, y2, side) {
-    const mx = (x1 + x2) / 2;
-    const my = (y1 + y2) / 2;
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const len = Math.hypot(dx, dy) || 1;
-    const ox = (-dy / len) * 36 * side;
-    const oy = (dx / len) * 36 * side;
-    return `M ${x1} ${y1} Q ${mx + ox} ${my + oy} ${x2} ${y2}`;
-  }
+    const prev = this.lanes;
+    this.lanes = new Map();
+    linkAll.each((l, i, nodes) => {
+      const el = nodes[i];
+      const length = el.getTotalLength();
+      const samples = 96;
+      const lut = d3.range(samples + 1).map((k) => {
+        const p = el.getPointAtLength((k / samples) * length);
+        return [p.x, p.y];
+      });
+      this.lanes.set(l.id, {
+        ...l,
+        lut,
+        length,
+        count: countFor(l.rate, length),
+        phase: prev.has(l.id) ? prev.get(l.id).phase : Math.random(),
+      });
+    });
 
-  desiredCount(norm, active) {
-    if (!active || norm <= 0) return 0;
-    // denser particles ⇒ more traffic
-    return Math.max(1, Math.round(1 + (norm * 14)));
-  }
-
-  syncParticles() {
-    const desired = [];
-    this.paths.forEach((meta, id) => {
-      const count = this.desiredCount(meta.norm, meta.active);
-      for (let i = 0; i < count; i += 1) {
-        desired.push({
-          id: `${id}:${i}`,
-          pathId: id,
-          // stagger along the path
-          t: (i / Math.max(count, 1) + Math.random() * 0.02) % 1,
-          speed: 0.12 + (meta.norm * 0.35),
-          kind: meta.kind,
-        });
+    const dots = [];
+    this.lanes.forEach((lane) => {
+      for (let k = 0; k < lane.count; k += 1) {
+        dots.push({ key: `${lane.id}:${k}`, lane: lane.id, k });
       }
     });
+    const dotSel = this.gDots.selectAll('circle').data(dots, (d) => d.key);
+    dotSel.exit().remove();
+    this.dotAll = dotSel.enter().append('circle')
+      .attr('r', 2.5)
+      .merge(dotSel)
+      .attr('fill', (d) => c[this.lanes.get(d.lane).kind]);
 
-    // Preserve existing particle progress where possible
-    const prev = new Map(this.particles.map((p) => [p.id, p]));
-    this.particles = desired.map((p) => {
-      const old = prev.get(p.id);
-      return old ? { ...p, t: old.t } : p;
-    });
+    const nodeSel = this.gNodes.selectAll('g.dev').data(devices, (d) => d.id);
+    nodeSel.exit().remove();
+    const enter = nodeSel.enter().append('g').attr('class', 'dev')
+      .style('cursor', 'default')
+      .on('mouseenter', (e, d) => {
+        this.hoverId = d.id; this.applyHover();
+      })
+      .on('mouseleave', () => {
+        this.hoverId = null; this.applyHover();
+      });
+    enter.append('rect').attr('class', 'hit');
+    enter.append('circle').attr('class', 'dot').attr('r', 7);
+    enter.append('text').attr('class', 'name')
+      .attr('text-anchor', 'end').attr('font-size', 13)
+      .attr('font-weight', 500);
+    enter.append('text').attr('class', 'rate')
+      .attr('text-anchor', 'end').attr('font-size', 11)
+      .attr('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace');
+
+    const nodes = enter.merge(nodeSel).attr('transform', (d) => `translate(${d.x},${d.y})`);
+    nodes.select('.hit')
+      .attr('x', -220).attr('y', -22)
+      .attr('width', 240)
+      .attr('height', 44)
+      .attr('fill', 'transparent');
+    nodes.select('.dot')
+      .attr('fill', (d) => (d.online ? c.node : c.offline))
+      .attr('stroke', (d) => (d.online ? '#10b981' : c.nodeStroke))
+      .attr('stroke-width', 2.5);
+    nodes.select('.name')
+      .attr('x', -18).attr('y', -2)
+      .attr('fill', (d) => (d.online ? c.text : c.muted))
+      .text((d) => d.name);
+    nodes.select('.rate')
+      .attr('x', -18).attr('y', 14)
+      .attr('fill', c.muted)
+      .text((d) => (d.online
+        ? `↑ ${this.formatRate(d.up)}/s  ↓ ${this.formatRate(d.down)}/s`
+        : d.address));
+
+    this.drawHub(hub, totalUp, totalDown, c);
+    this.drawNet(net, c);
+    this.applyHover();
+  }
+
+  drawHub(hub, totalUp, totalDown, c) {
+    let g = this.gNodes.select('g.hub');
+    if (g.empty()) {
+      g = this.gNodes.append('g').attr('class', 'hub');
+      g.append('circle').attr('class', 'ring').attr('r', 34);
+      g.append('circle').attr('class', 'core').attr('r', 26);
+      g.append('text').attr('class', 'title')
+        .attr('text-anchor', 'middle').attr('dy', 5)
+        .attr('font-size', 13)
+        .attr('font-weight', 700)
+        .attr('fill', '#fff')
+        .text('VPN');
+      g.append('text').attr('class', 'up')
+        .attr('text-anchor', 'middle').attr('y', 56)
+        .attr('font-size', 11)
+        .attr('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace');
+      g.append('text').attr('class', 'down')
+        .attr('text-anchor', 'middle').attr('y', 72)
+        .attr('font-size', 11)
+        .attr('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace');
+    }
+    g.attr('transform', `translate(${hub.x},${hub.y})`);
+    g.select('.ring').attr('fill', c.hub).attr('opacity', 0.15);
+    g.select('.core').attr('fill', c.hub);
+    g.select('.up').attr('fill', c.up).text(`↑ ${this.formatRate(totalUp)}/s`);
+    g.select('.down').attr('fill', c.down).text(`↓ ${this.formatRate(totalDown)}/s`);
+  }
+
+  drawNet(net, c) {
+    let g = this.gNodes.select('g.net');
+    if (g.empty()) {
+      g = this.gNodes.append('g').attr('class', 'net');
+      g.append('circle').attr('class', 'core').attr('r', 22);
+      // globe glyph
+      g.append('circle').attr('class', 'glyph').attr('r', 10)
+        .attr('fill', 'none')
+        .attr('stroke-width', 1.5);
+      g.append('ellipse').attr('class', 'glyph').attr('rx', 4.5)
+        .attr('ry', 10)
+        .attr('fill', 'none')
+        .attr('stroke-width', 1.5);
+      g.append('line').attr('class', 'glyph').attr('x1', -10)
+        .attr('x2', 10)
+        .attr('stroke-width', 1.5);
+      g.append('text').attr('class', 'label')
+        .attr('text-anchor', 'middle').attr('y', 42)
+        .attr('font-size', 12);
+    }
+    g.attr('transform', `translate(${net.x},${net.y})`);
+    g.select('.core').attr('fill', c.node).attr('stroke', c.nodeStroke)
+      .attr('stroke-width', 1.5);
+    g.selectAll('.glyph').attr('stroke', c.muted);
+    g.select('.label').attr('fill', c.muted).text(this.outsideLabel);
+  }
+
+  applyHover() {
+    const focus = this.hoverId;
+    this.gLinks.selectAll('path')
+      .attr('opacity', (l) => (!focus || l.owner === null || l.owner === focus ? 1 : 0.15));
+    this.gNodes.selectAll('g.dev')
+      .attr('opacity', (d) => (!focus || d.id === focus ? 1 : 0.35));
+    if (this.dotAll) {
+      this.dotAll.attr('opacity', (d) => {
+        const lane = this.lanes.get(d.lane);
+        return !focus || !lane || lane.owner === null || lane.owner === focus ? 1 : 0.1;
+      });
+    }
   }
 
   tick(ts) {
-    const dt = this.lastTs ? Math.min(0.05, (ts - this.lastTs) / 1000) : 0.016;
+    const dt = this.lastTs ? Math.min(0.05, (ts - this.lastTs) / 1000) : 0;
     this.lastTs = ts;
+    const pxPerSec = 80;
 
-    this.particles.forEach((p) => {
-      p.t = (p.t + (p.speed * dt)) % 1;
+    this.lanes.forEach((lane) => {
+      if (lane.length > 0) lane.phase = (lane.phase + (pxPerSec * dt) / lane.length) % 1;
     });
 
-    const sel = this.gParticles.selectAll('circle.topo-dot')
-      .data(this.particles, (d) => d.id);
-
-    sel.exit().remove();
-
-    sel.enter().append('circle')
-      .attr('class', 'topo-dot')
-      .attr('r', 3.1)
-      .attr('filter', 'drop-shadow(0 0 3px rgba(185,28,28,0.65))')
-      .merge(sel)
-      .attr('fill', (d) => (d.kind === 'up' ? '#b91c1c' : '#f87171'))
-      .attr('cx', (d) => {
-        const path = this.paths.get(d.pathId);
-        if (!path || !path.length) return -10;
-        return path.el.getPointAtLength(d.t * path.length).x;
-      })
-      .attr('cy', (d) => {
-        const path = this.paths.get(d.pathId);
-        if (!path || !path.length) return -10;
-        return path.el.getPointAtLength(d.t * path.length).y;
+    if (this.dotAll) {
+      this.dotAll.each((d, i, nodes) => {
+        const lane = this.lanes.get(d.lane);
+        if (!lane || !lane.count) return;
+        const t = (lane.phase + d.k / lane.count) % 1;
+        const f = t * (lane.lut.length - 1);
+        const a = lane.lut[Math.floor(f)];
+        const b = lane.lut[Math.min(lane.lut.length - 1, Math.floor(f) + 1)];
+        const r = f - Math.floor(f);
+        const el = nodes[i];
+        el.setAttribute('cx', a[0] + (b[0] - a[0]) * r);
+        el.setAttribute('cy', a[1] + (b[1] - a[1]) * r);
+        // fade at both ends so dots don't pop in/out on top of nodes
+        el.setAttribute('fill-opacity', Math.min(1, t * 8, (1 - t) * 8));
       });
+    }
 
     this.raf = requestAnimationFrame(this.tick);
   }

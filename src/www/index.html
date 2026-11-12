@@ -21,20 +21,11 @@
     transform: translateY(3px);
   }
 
-  .traffic-topo {
-    background:
-      radial-gradient(ellipse at center, rgba(153, 27, 27, 0.07), transparent 58%),
-      linear-gradient(180deg, rgba(0, 0, 0, 0.02), transparent);
-  }
-
-  .dark .traffic-topo {
-    background:
-      radial-gradient(ellipse at center, rgba(248, 113, 113, 0.08), transparent 58%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
-  }
-
-  .traffic-flow-dot {
-    filter: drop-shadow(0 0 3px rgba(185, 28, 28, 0.65));
+  .traffic-topo-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 70vh;
   }
 </style>
 
@@ -452,9 +443,27 @@
               <div class="px-5 pt-5 pr-14">
                 <p class="text-xl font-medium dark:text-neutral-100">{{$t("trafficTopology")}}</p>
                 <p class="text-xs text-gray-400 dark:text-neutral-400 mt-1">{{$t("trafficTopologyHint")}}</p>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-xs text-gray-500 dark:text-neutral-400">
+                  <span class="inline-flex items-center gap-1.5">
+                    <span class="inline-block w-2 h-2 rounded-full bg-red-600 dark:bg-red-400"></span>
+                    {{$t("rateUp")}}
+                  </span>
+                  <span class="inline-flex items-center gap-1.5">
+                    <span class="inline-block w-2 h-2 rounded-full bg-amber-600 dark:bg-amber-400"></span>
+                    {{$t("rateDown")}}
+                  </span>
+                  <span class="inline-flex items-center gap-1.5">
+                    <span class="inline-block w-2 h-2 rounded-full border-2 border-emerald-500"></span>
+                    {{$t("online")}}
+                  </span>
+                  <span class="inline-flex items-center gap-1.5">
+                    <span class="inline-block w-2 h-2 rounded-full bg-gray-300 dark:bg-neutral-600"></span>
+                    {{$t("offline")}}
+                  </span>
+                </div>
               </div>
-              <div class="traffic-topo mt-2 px-2 pb-2">
-                <div ref="trafficTopologyEl" class="w-full min-h-[280px]"></div>
+              <div class="px-3 pb-4 pt-1">
+                <div ref="trafficTopologyEl" class="w-full"></div>
               </div>
             </div>
           </div>
