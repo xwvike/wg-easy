@@ -3,20 +3,15 @@
 'use strict';
 
 /**
- * Relay topology: devices (left) ⇄ VPN (center) ⇄ Internet (right).
- * Each hop has an upload lane and a download lane; particles move at a
+ * Star topology: VPN hub in the center, every device around it.
+ * Each spoke has an upload lane and a download lane; particles move at a
  * constant speed, so their spacing (density) reflects throughput.
  */
 class TrafficTopologyChart {
 
-  constructor(container, {
-    formatRate = (n) => `${n}`,
-    dark = false,
-    outsideLabel = 'Internet',
-  } = {}) {
+  constructor(container, { formatRate = (n) => `${n}`, dark = false } = {}) {
     this.container = container;
     this.formatRate = formatRate;
-    this.outsideLabel = outsideLabel;
     this.dark = dark;
     this.width = 900;
     this.height = 400;
@@ -85,27 +80,28 @@ class TrafficTopologyChart {
   update(clients) {
     const c = this.palette();
     const list = clients || [];
-    const rowGap = 56;
-    const top = 44;
-    this.height = Math.max(320, top * 2 + Math.max(list.length - 1, 0) * rowGap);
+    const n = list.length;
+    const radius = Math.max(170, Math.min(260, n * 26));
+    this.width = 2 * (radius + 190);
+    this.height = 2 * (radius + 64);
     this.svg.attr('viewBox', `0 0 ${this.width} ${this.height}`);
 
-    const midY = this.height / 2;
-    const devX = 230;
-    const hub = { x: 560, y: midY };
-    const net = { x: 800, y: midY };
+    const hub = { x: this.width / 2, y: this.height / 2, r: 46 };
+    const devR = 8;
 
     const devices = list.map((client, i) => {
       const up = Math.max(0, client.transferRxCurrent || 0);
       const down = Math.max(0, client.transferTxCurrent || 0);
       const online = !!(client.enabled && client.latestHandshakeAt
         && (Date.now() - new Date(client.latestHandshakeAt).getTime()) < 180000);
+      const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(n, 1);
       return {
         id: client.id,
         name: client.name,
         address: client.address,
-        x: devX,
-        y: list.length === 1 ? midY : top + i * rowGap,
+        angle,
+        x: hub.x + radius * Math.cos(angle),
+        y: hub.y + radius * Math.sin(angle),
         up: online ? up : 0,
         down: online ? down : 0,
         online,
@@ -114,7 +110,7 @@ class TrafficTopologyChart {
 
     const totalUp = d3.sum(devices, (d) => d.up);
     const totalDown = d3.sum(devices, (d) => d.down);
-    const maxRate = Math.max(1, totalUp, totalDown);
+    const maxRate = Math.max(1, d3.max(devices, (d) => Math.max(d.up, d.down)) || 0);
     // particle spacing in px: busiest lane ≈ 7px apart, any non-zero flow ≤ 90px apart
     const spacing = d3.scaleSqrt().domain([0, maxRate]).range([90, 7])
       .clamp(true);
@@ -124,20 +120,22 @@ class TrafficTopologyChart {
     const widthFor = d3.scaleSqrt().domain([0, maxRate]).range([1.25, 4])
       .clamp(true);
 
-    const link = (x0, y0, x1, y1) => {
-      const mx = (x0 + x1) / 2;
-      return `M${x0},${y0} C${mx},${y0} ${mx},${y1} ${x1},${y1}`;
-    };
-
     const lanes = [];
     devices.forEach((d) => {
+      const ux = Math.cos(d.angle);
+      const uy = Math.sin(d.angle);
+      // perpendicular offset keeps upload and download lanes side by side
+      const px = -uy * 3.5;
+      const py = ux * 3.5;
+      const near = [hub.x + ux * hub.r, hub.y + uy * hub.r];
+      const far = [d.x - ux * devR, d.y - uy * devR];
       lanes.push({
         id: `u:${d.id}`,
         owner: d.id,
         kind: 'up',
         rate: d.up,
         online: d.online,
-        path: link(d.x, d.y - 4, hub.x, hub.y - 4),
+        path: `M${far[0] + px},${far[1] + py} L${near[0] + px},${near[1] + py}`,
       });
       lanes.push({
         id: `d:${d.id}`,
@@ -145,24 +143,8 @@ class TrafficTopologyChart {
         kind: 'down',
         rate: d.down,
         online: d.online,
-        path: link(hub.x, hub.y + 4, d.x, d.y + 4),
+        path: `M${near[0] - px},${near[1] - py} L${far[0] - px},${far[1] - py}`,
       });
-    });
-    lanes.push({
-      id: 'u:net',
-      owner: null,
-      kind: 'up',
-      rate: totalUp,
-      online: true,
-      path: link(hub.x, hub.y - 6, net.x, net.y - 6),
-    });
-    lanes.push({
-      id: 'd:net',
-      owner: null,
-      kind: 'down',
-      rate: totalDown,
-      online: true,
-      path: link(net.x, net.y + 6, hub.x, hub.y + 6),
     });
 
     const linkSel = this.gLinks.selectAll('path').data(lanes, (l) => l.id);
@@ -219,106 +201,93 @@ class TrafficTopologyChart {
       .on('mouseleave', () => {
         this.hoverId = null; this.applyHover();
       });
-    enter.append('rect').attr('class', 'hit');
-    enter.append('circle').attr('class', 'dot').attr('r', 7);
+    enter.append('circle').attr('class', 'hit').attr('r', 18)
+      .attr('fill', 'transparent');
+    enter.append('circle').attr('class', 'dot').attr('r', devR);
     enter.append('text').attr('class', 'name')
-      .attr('text-anchor', 'end').attr('font-size', 13)
+      .attr('font-size', 13)
       .attr('font-weight', 500);
     enter.append('text').attr('class', 'rate')
-      .attr('text-anchor', 'end').attr('font-size', 11)
+      .attr('font-size', 11)
       .attr('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace');
 
     const nodes = enter.merge(nodeSel).attr('transform', (d) => `translate(${d.x},${d.y})`);
-    nodes.select('.hit')
-      .attr('x', -220).attr('y', -22)
-      .attr('width', 240)
-      .attr('height', 44)
-      .attr('fill', 'transparent');
     nodes.select('.dot')
       .attr('fill', (d) => (d.online ? c.node : c.offline))
       .attr('stroke', (d) => (d.online ? '#10b981' : c.nodeStroke))
       .attr('stroke-width', 2.5);
+    nodes.selectAll('text')
+      .attr('text-anchor', (d) => TrafficTopologyChart.anchorFor(d.angle))
+      .attr('x', (d) => Math.cos(d.angle) * 18);
     nodes.select('.name')
-      .attr('x', -18).attr('y', -2)
+      .attr('y', (d) => TrafficTopologyChart.labelY(d.angle)[0])
       .attr('fill', (d) => (d.online ? c.text : c.muted))
       .text((d) => d.name);
     nodes.select('.rate')
-      .attr('x', -18).attr('y', 14)
+      .attr('y', (d) => TrafficTopologyChart.labelY(d.angle)[1])
       .attr('fill', c.muted)
       .text((d) => (d.online
         ? `↑ ${this.formatRate(d.up)}/s  ↓ ${this.formatRate(d.down)}/s`
         : d.address));
 
     this.drawHub(hub, totalUp, totalDown, c);
-    this.drawNet(net, c);
     this.applyHover();
+  }
+
+  static anchorFor(angle) {
+    const cos = Math.cos(angle);
+    if (cos > 0.3) return 'start';
+    if (cos < -0.3) return 'end';
+    return 'middle';
+  }
+
+  static labelY(angle) {
+    const sin = Math.sin(angle);
+    if (sin < -0.7) return [-32, -18];
+    if (sin > 0.7) return [30, 44];
+    return [-2, 13];
   }
 
   drawHub(hub, totalUp, totalDown, c) {
     let g = this.gNodes.select('g.hub');
     if (g.empty()) {
       g = this.gNodes.append('g').attr('class', 'hub');
-      g.append('circle').attr('class', 'ring').attr('r', 34);
-      g.append('circle').attr('class', 'core').attr('r', 26);
+      g.append('circle').attr('class', 'ring').attr('r', hub.r + 10);
+      g.append('circle').attr('class', 'core').attr('r', hub.r);
       g.append('text').attr('class', 'title')
-        .attr('text-anchor', 'middle').attr('dy', 5)
-        .attr('font-size', 13)
+        .attr('text-anchor', 'middle').attr('y', -8)
+        .attr('font-size', 14)
         .attr('font-weight', 700)
         .attr('fill', '#fff')
         .text('VPN');
       g.append('text').attr('class', 'up')
-        .attr('text-anchor', 'middle').attr('y', 56)
-        .attr('font-size', 11)
+        .attr('text-anchor', 'middle').attr('y', 10)
+        .attr('font-size', 10)
+        .attr('fill', '#fee2e2')
         .attr('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace');
       g.append('text').attr('class', 'down')
-        .attr('text-anchor', 'middle').attr('y', 72)
-        .attr('font-size', 11)
+        .attr('text-anchor', 'middle').attr('y', 23)
+        .attr('font-size', 10)
+        .attr('fill', '#fee2e2')
         .attr('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace');
     }
     g.attr('transform', `translate(${hub.x},${hub.y})`);
     g.select('.ring').attr('fill', c.hub).attr('opacity', 0.15);
     g.select('.core').attr('fill', c.hub);
-    g.select('.up').attr('fill', c.up).text(`↑ ${this.formatRate(totalUp)}/s`);
-    g.select('.down').attr('fill', c.down).text(`↓ ${this.formatRate(totalDown)}/s`);
-  }
-
-  drawNet(net, c) {
-    let g = this.gNodes.select('g.net');
-    if (g.empty()) {
-      g = this.gNodes.append('g').attr('class', 'net');
-      g.append('circle').attr('class', 'core').attr('r', 22);
-      // globe glyph
-      g.append('circle').attr('class', 'glyph').attr('r', 10)
-        .attr('fill', 'none')
-        .attr('stroke-width', 1.5);
-      g.append('ellipse').attr('class', 'glyph').attr('rx', 4.5)
-        .attr('ry', 10)
-        .attr('fill', 'none')
-        .attr('stroke-width', 1.5);
-      g.append('line').attr('class', 'glyph').attr('x1', -10)
-        .attr('x2', 10)
-        .attr('stroke-width', 1.5);
-      g.append('text').attr('class', 'label')
-        .attr('text-anchor', 'middle').attr('y', 42)
-        .attr('font-size', 12);
-    }
-    g.attr('transform', `translate(${net.x},${net.y})`);
-    g.select('.core').attr('fill', c.node).attr('stroke', c.nodeStroke)
-      .attr('stroke-width', 1.5);
-    g.selectAll('.glyph').attr('stroke', c.muted);
-    g.select('.label').attr('fill', c.muted).text(this.outsideLabel);
+    g.select('.up').text(`↑ ${this.formatRate(totalUp)}/s`);
+    g.select('.down').text(`↓ ${this.formatRate(totalDown)}/s`);
   }
 
   applyHover() {
     const focus = this.hoverId;
     this.gLinks.selectAll('path')
-      .attr('opacity', (l) => (!focus || l.owner === null || l.owner === focus ? 1 : 0.15));
+      .attr('opacity', (l) => (!focus || l.owner === focus ? 1 : 0.15));
     this.gNodes.selectAll('g.dev')
       .attr('opacity', (d) => (!focus || d.id === focus ? 1 : 0.35));
     if (this.dotAll) {
       this.dotAll.attr('opacity', (d) => {
         const lane = this.lanes.get(d.lane);
-        return !focus || !lane || lane.owner === null || lane.owner === focus ? 1 : 0.1;
+        return !focus || !lane || lane.owner === focus ? 1 : 0.1;
       });
     }
   }
