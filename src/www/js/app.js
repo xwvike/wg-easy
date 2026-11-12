@@ -72,8 +72,8 @@ new Vue({
     latestRelease: null,
 
     uiTrafficStats: false,
-    trafficModalClient: null,
-    trafficPreviewTimer: null,
+    trafficModalOpen: false,
+    trafficChart: null,
 
     uiChartType: 0,
     uiShowCharts: localStorage.getItem('uiShowCharts') === '1',
@@ -175,30 +175,36 @@ new Vue({
       if (!client || !client.enabled || !client.latestHandshakeAt) return false;
       return (Date.now() - new Date(client.latestHandshakeAt).getTime()) < 180000;
     },
-    openTrafficTopology(client) {
-      if (this.trafficPreviewTimer) {
-        clearTimeout(this.trafficPreviewTimer);
-        this.trafficPreviewTimer = null;
-      }
-      this.trafficModalClient = client;
-    },
-    previewTrafficTopology(client) {
-      if (this.trafficModalClient) return;
-      if (this.trafficPreviewTimer) clearTimeout(this.trafficPreviewTimer);
-      this.trafficPreviewTimer = setTimeout(() => {
-        this.trafficModalClient = client;
-        this.trafficPreviewTimer = null;
-      }, 350);
-    },
-    cancelTrafficTopologyPreview() {
-      if (this.trafficPreviewTimer) {
-        clearTimeout(this.trafficPreviewTimer);
-        this.trafficPreviewTimer = null;
-      }
+    openTrafficTopology() {
+      this.trafficModalOpen = true;
+      this.$nextTick(() => this.mountTrafficTopology());
     },
     closeTrafficTopology() {
-      this.cancelTrafficTopologyPreview();
-      this.trafficModalClient = null;
+      if (this.trafficChart) {
+        this.trafficChart.destroy();
+        this.trafficChart = null;
+      }
+      this.trafficModalOpen = false;
+    },
+    mountTrafficTopology() {
+      const el = this.$refs.trafficTopologyEl;
+      if (!el || typeof TrafficTopologyChart === 'undefined') return;
+      if (this.trafficChart) {
+        this.trafficChart.destroy();
+        this.trafficChart = null;
+      }
+      this.trafficChart = new TrafficTopologyChart(el, {
+        width: Math.max(640, el.clientWidth || 840),
+        height: 460,
+        dark: this.theme === 'dark',
+        formatRate: (n) => bytes(Math.max(0, n || 0)),
+      });
+      this.trafficChart.update(this.clients || []);
+    },
+    refreshTrafficTopology() {
+      if (!this.trafficModalOpen || !this.trafficChart) return;
+      this.trafficChart.setDark(this.theme === 'dark');
+      this.trafficChart.update(this.clients || []);
     },
     async refresh({
       updateCharts = false,
@@ -262,10 +268,7 @@ new Vue({
         return client;
       });
 
-      if (this.trafficModalClient) {
-        const live = this.clients.find((c) => c.id === this.trafficModalClient.id);
-        this.trafficModalClient = live || null;
-      }
+      this.refreshTrafficTopology();
     },
     login(e) {
       e.preventDefault();
@@ -539,43 +542,10 @@ new Vue({
       }
       return this.uiTheme;
     },
-    trafficTopology() {
-      if (!this.trafficModalClient) return null;
-      const live = (this.clients || []).find((c) => c.id === this.trafficModalClient.id)
-        || this.trafficModalClient;
-      // WG dump: rx = from peer (upload), tx = to peer (download)
-      const up = Math.max(0, live.transferRxCurrent || 0);
-      const down = Math.max(0, live.transferTxCurrent || 0);
-      const maxRate = Math.max(1, up, down);
-      const upNorm = Math.min(1, up / maxRate);
-      const downNorm = Math.min(1, down / maxRate);
-      const clientX = 110;
-      const clientY = 150;
-      const cx = 360;
-      const cy = 150;
-      const netX = 610;
-      const netY = 150;
-      // Through-relay paths: device → VPN → outside, and the reverse
-      const upPath = `M ${clientX} ${clientY} Q ${(clientX + cx) / 2} ${cy - 70} ${cx} ${cy} Q ${(cx + netX) / 2} ${cy - 70} ${netX} ${netY}`;
-      const downPath = `M ${netX} ${netY} Q ${(cx + netX) / 2} ${cy + 70} ${cx} ${cy} Q ${(clientX + cx) / 2} ${cy + 70} ${clientX} ${clientY}`;
-      return {
-        clientX,
-        clientY,
-        cx,
-        cy,
-        netX,
-        netY,
-        up,
-        down,
-        upNorm,
-        downNorm,
-        upPath,
-        downPath,
-        upParticles: up > 0 ? Math.max(1, Math.round(1 + (upNorm * 3))) : 0,
-        downParticles: down > 0 ? Math.max(1, Math.round(1 + (downNorm * 3))) : 0,
-        upDur: Number((3.6 - (upNorm * 2.2)).toFixed(2)),
-        downDur: Number((3.6 - (downNorm * 2.2)).toFixed(2)),
-      };
+  },
+  watch: {
+    theme() {
+      this.refreshTrafficTopology();
     },
   },
 });

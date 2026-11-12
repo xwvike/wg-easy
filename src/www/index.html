@@ -48,6 +48,16 @@
               class="align-middle">WireGuard</span>
           </h1>
           <div class="flex items-center grow-0 gap-3 items-end self-end xxs:self-center">
+            <!-- Traffic topology -->
+            <button @click="openTrafficTopology()"
+              class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition"
+              :title="$t('trafficTopology')">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                stroke="currentColor" class="w-5 h-5 text-gray-600 dark:text-neutral-400">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M7.5 7.5h-.75A2.25 2.25 0 0 0 4.5 9.75v7.5a2.25 2.25 0 0 0 2.25 2.25h7.5a2.25 2.25 0 0 0 2.25-2.25v-7.5a2.25 2.25 0 0 0-2.25-2.25h-.75m-6 3.75 3 3m0 0 3-3m-3 3V3.75m9 13.5h.75a2.25 2.25 0 0 0 2.25-2.25V8.25a2.25 2.25 0 0 0-2.25-2.25h-7.5a2.25 2.25 0 0 0-2.25 2.25v.75" />
+              </svg>
+            </button>
             <!-- Dark / light theme -->
             <button @click="toggleTheme"
               class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition"
@@ -336,20 +346,6 @@
                 <div class="flex items-center justify-end">
                   <div class="text-gray-400 dark:text-neutral-400 flex gap-1 items-center justify-between">
 
-                    <!-- Traffic topology -->
-                    <button
-                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white dark:hover:text-white p-2 rounded transition"
-                      :title="$t('trafficTopology')"
-                      @click="openTrafficTopology(client)"
-                      @mouseenter="previewTrafficTopology(client)"
-                      @mouseleave="cancelTrafficTopologyPreview()">
-                      <svg xmlns="http://www.w3.org/2000/svg" class="w-5" fill="none" viewBox="0 0 24 24"
-                        stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                          d="M7.5 7.5h-.75A2.25 2.25 0 0 0 4.5 9.75v7.5a2.25 2.25 0 0 0 2.25 2.25h7.5a2.25 2.25 0 0 0 2.25-2.25v-7.5a2.25 2.25 0 0 0-2.25-2.25h-.75m-6 3.75 3 3m0 0 3-3m-3 3V3.75m9 13.5h.75a2.25 2.25 0 0 0 2.25-2.25V8.25a2.25 2.25 0 0 0-2.25-2.25h-7.5a2.25 2.25 0 0 0-2.25 2.25v.75" />
-                      </svg>
-                    </button>
-
                     <!-- Settings -->
                     <button
                       class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white dark:hover:text-white p-2 rounded transition"
@@ -442,10 +438,10 @@
         </div>
 
         <!-- Traffic topology modal -->
-        <div v-if="trafficModalClient">
+        <div v-if="trafficModalOpen">
           <div class="bg-black bg-opacity-50 fixed top-0 right-0 left-0 bottom-0 flex items-center justify-center z-20 p-3"
             @click.self="closeTrafficTopology()">
-            <div class="bg-white dark:bg-neutral-700 rounded-md shadow-lg relative w-full max-w-3xl overflow-hidden">
+            <div class="bg-white dark:bg-neutral-700 rounded-md shadow-lg relative w-full max-w-4xl overflow-hidden">
               <button @click="closeTrafficTopology()"
                 class="absolute right-4 top-4 z-10 text-gray-600 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200">
                 <svg class="w-7" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
@@ -456,104 +452,9 @@
               <div class="px-5 pt-5 pr-14">
                 <p class="text-xl font-medium dark:text-neutral-100">{{$t("trafficTopology")}}</p>
                 <p class="text-xs text-gray-400 dark:text-neutral-400 mt-1">{{$t("trafficTopologyHint")}}</p>
-                <div class="mt-3 flex flex-wrap gap-3 text-xs font-mono text-gray-600 dark:text-neutral-300">
-                  <span>{{ trafficModalClient.name }} · {{ trafficModalClient.address }}</span>
-                  <span>{{$t("rateUp")}}: {{ trafficTopology.up | bytes }}/s</span>
-                  <span>{{$t("rateDown")}}: {{ trafficTopology.down | bytes }}/s</span>
-                </div>
               </div>
-              <div class="traffic-topo mt-2">
-                <svg v-if="trafficTopology" viewBox="0 0 720 300" class="w-full h-auto block select-none"
-                  xmlns:xlink="http://www.w3.org/1999/xlink" role="img" :aria-label="$t('trafficTopology')">
-                  <defs>
-                    <linearGradient id="relayUp" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stop-color="#b91c1c" stop-opacity="0.2" />
-                      <stop offset="50%" stop-color="#b91c1c" stop-opacity="0.9" />
-                      <stop offset="100%" stop-color="#b91c1c" stop-opacity="0.2" />
-                    </linearGradient>
-                    <linearGradient id="relayDown" x1="100%" y1="0%" x2="0%" y2="0%">
-                      <stop offset="0%" stop-color="#f87171" stop-opacity="0.2" />
-                      <stop offset="50%" stop-color="#f87171" stop-opacity="0.9" />
-                      <stop offset="100%" stop-color="#f87171" stop-opacity="0.2" />
-                    </linearGradient>
-                  </defs>
-
-                  <!-- upload: device → VPN → outside -->
-                  <path id="relay-up-path" :d="trafficTopology.upPath" fill="none" stroke="url(#relayUp)"
-                    :stroke-width="1.5 + (6 * trafficTopology.upNorm)"
-                    :opacity="trafficTopology.up > 0 ? (0.4 + 0.5 * trafficTopology.upNorm) : 0.15"
-                    stroke-linecap="round" />
-                  <!-- download: outside → VPN → device -->
-                  <path id="relay-down-path" :d="trafficTopology.downPath" fill="none" stroke="url(#relayDown)"
-                    :stroke-width="1.5 + (6 * trafficTopology.downNorm)"
-                    :opacity="trafficTopology.down > 0 ? (0.4 + 0.5 * trafficTopology.downNorm) : 0.15"
-                    stroke-linecap="round" />
-
-                  <g v-if="trafficTopology.up > 0">
-                    <circle v-for="n in trafficTopology.upParticles" :key="'up-' + n"
-                      class="traffic-flow-dot" r="3.4" fill="#b91c1c">
-                      <animateMotion :dur="trafficTopology.upDur + 's'"
-                        :begin="((n - 1) * trafficTopology.upDur / trafficTopology.upParticles) + 's'"
-                        repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear">
-                        <mpath v-bind="{'xlink:href': '#relay-up-path'}" />
-                      </animateMotion>
-                    </circle>
-                  </g>
-                  <g v-if="trafficTopology.down > 0">
-                    <circle v-for="n in trafficTopology.downParticles" :key="'down-' + n"
-                      class="traffic-flow-dot" r="3.4" fill="#f87171">
-                      <animateMotion :dur="trafficTopology.downDur + 's'"
-                        :begin="((n - 1) * trafficTopology.downDur / trafficTopology.downParticles) + 's'"
-                        repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear">
-                        <mpath v-bind="{'xlink:href': '#relay-down-path'}" />
-                      </animateMotion>
-                    </circle>
-                  </g>
-
-                  <!-- device -->
-                  <circle :cx="trafficTopology.clientX" :cy="trafficTopology.clientY" r="22"
-                    :fill="theme === 'dark' ? '#e5e5e5' : '#374151'" />
-                  <text :x="trafficTopology.clientX" :y="trafficTopology.clientY + 5" text-anchor="middle"
-                    :fill="theme === 'dark' ? '#171717' : '#ffffff'" font-size="11" font-weight="600">DEV</text>
-                  <text :x="trafficTopology.clientX" :y="trafficTopology.clientY + 42" text-anchor="middle"
-                    :fill="theme === 'dark' ? '#d4d4d4' : '#4b5563'" font-size="12">{{ trafficModalClient.name }}</text>
-
-                  <!-- VPN relay hub -->
-                  <circle :cx="trafficTopology.cx" :cy="trafficTopology.cy" r="30" fill="#991b1b" opacity="0.3">
-                    <animate attributeName="r" values="28;36;28" dur="2.2s" repeatCount="indefinite" />
-                    <animate attributeName="opacity" values="0.2;0.45;0.2" dur="2.2s" repeatCount="indefinite" />
-                  </circle>
-                  <circle :cx="trafficTopology.cx" :cy="trafficTopology.cy" r="22" fill="#991b1b" />
-                  <text :x="trafficTopology.cx" :y="trafficTopology.cy + 5" text-anchor="middle"
-                    fill="#ffffff" font-size="11" font-weight="600">VPN</text>
-                  <text :x="trafficTopology.cx" :y="trafficTopology.cy + 42" text-anchor="middle"
-                    :fill="theme === 'dark' ? '#a3a3a3' : '#9ca3af'" font-size="11">{{$t("trafficRelay")}}</text>
-
-                  <!-- outside / internet -->
-                  <circle :cx="trafficTopology.netX" :cy="trafficTopology.netY" r="22"
-                    :fill="theme === 'dark' ? '#737373' : '#6b7280'" />
-                  <text :x="trafficTopology.netX" :y="trafficTopology.netY + 5" text-anchor="middle"
-                    fill="#ffffff" font-size="11" font-weight="600">NET</text>
-                  <text :x="trafficTopology.netX" :y="trafficTopology.netY + 42" text-anchor="middle"
-                    :fill="theme === 'dark' ? '#d4d4d4' : '#4b5563'" font-size="12">{{$t("trafficOutside")}}</text>
-
-                  <text :x="(trafficTopology.clientX + trafficTopology.cx) / 2" y="58" text-anchor="middle"
-                    fill="#b91c1c" font-size="11" font-family="ui-monospace, monospace">
-                    ↑ {{ trafficTopology.up | bytes }}/s
-                  </text>
-                  <text :x="(trafficTopology.cx + trafficTopology.netX) / 2" y="58" text-anchor="middle"
-                    fill="#b91c1c" font-size="11" font-family="ui-monospace, monospace">
-                    ↑ {{ trafficTopology.up | bytes }}/s
-                  </text>
-                  <text :x="(trafficTopology.clientX + trafficTopology.cx) / 2" y="258" text-anchor="middle"
-                    fill="#f87171" font-size="11" font-family="ui-monospace, monospace">
-                    ↓ {{ trafficTopology.down | bytes }}/s
-                  </text>
-                  <text :x="(trafficTopology.cx + trafficTopology.netX) / 2" y="258" text-anchor="middle"
-                    fill="#f87171" font-size="11" font-family="ui-monospace, monospace">
-                    ↓ {{ trafficTopology.down | bytes }}/s
-                  </text>
-                </svg>
+              <div class="traffic-topo mt-2 px-2 pb-2">
+                <div ref="trafficTopologyEl" class="w-full min-h-[280px]"></div>
               </div>
             </div>
           </div>
@@ -912,9 +813,11 @@
   <script src="./js/vendor/vue-i18n.min.js"></script>
   <script src="./js/vendor/apexcharts.min.js"></script>
   <script src="./js/vendor/vue-apexcharts.min.js"></script>
+  <script src="./js/vendor/d3.min.js"></script>
   <script src="./js/vendor/md5.min.js"></script>
   <script src="./js/vendor/sha256.min.js"></script>
   <script src="./js/vendor/timeago.full.min.js"></script>
+  <script src="./js/traffic-topology.js"></script>
   <script src="./js/api.js"></script>
   <script src="./js/i18n.js"></script>
   <script src="./js/app.js"></script>
