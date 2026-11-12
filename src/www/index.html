@@ -20,6 +20,13 @@
   .line-chart .apexcharts-svg {
     transform: translateY(3px);
   }
+
+  .traffic-topo-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 70vh;
+  }
 </style>
 
 <body class="bg-gray-50 dark:bg-neutral-800">
@@ -32,6 +39,21 @@
               class="align-middle">WireGuard</span>
           </h1>
           <div class="flex items-center grow-0 gap-3 items-end self-end xxs:self-center">
+            <!-- Traffic topology -->
+            <button @click="openTrafficTopology()"
+              class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition"
+              :title="$t('trafficTopology')">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6"
+                stroke="currentColor" class="w-5 h-5 dark:text-neutral-400">
+                <circle cx="12" cy="12" r="2.75" />
+                <circle cx="5" cy="5" r="2" />
+                <circle cx="19" cy="5" r="2" />
+                <circle cx="5" cy="19" r="2" />
+                <circle cx="19" cy="19" r="2" />
+                <path stroke-linecap="round" d="M6.5 6.5l3.5 3.5M17.5 6.5 14 10M6.5 17.5l3.5-3.5M17.5 17.5 14 14" />
+                <path stroke-linecap="round" stroke-dasharray="1 2.2" d="M7.5 19h9" />
+              </svg>
+            </button>
             <!-- Dark / light theme -->
             <button @click="toggleTheme"
               class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition"
@@ -411,6 +433,46 @@
           </div>
         </div>
 
+        <!-- Traffic topology modal -->
+        <div v-if="trafficModalOpen">
+          <div class="bg-black bg-opacity-50 fixed top-0 right-0 left-0 bottom-0 flex items-center justify-center z-20 p-3"
+            @click.self="closeTrafficTopology()">
+            <div class="bg-white dark:bg-neutral-700 rounded-md shadow-lg relative w-full max-w-4xl overflow-hidden">
+              <button @click="closeTrafficTopology()"
+                class="absolute right-4 top-4 z-10 text-gray-600 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200">
+                <svg class="w-7" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                  stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <div class="px-5 pt-5 pr-14">
+                <p class="text-xl font-medium dark:text-neutral-100">{{$t("trafficTopology")}}</p>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-gray-500 dark:text-neutral-400">
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-5 h-2" viewBox="0 0 20 8"><path d="M1 6 Q10 -2 19 6" fill="none" stroke="#4e79a7" stroke-width="2" stroke-linecap="round" /></svg>
+                    {{$t("trafficPeerLink")}}
+                  </span>
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-5 h-2" viewBox="0 0 20 8"><path d="M1 6 Q10 -2 19 6" fill="none" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" stroke-linecap="round" /></svg>
+                    {{$t("trafficOther")}}
+                  </span>
+                  <span class="inline-flex items-center gap-1.5">
+                    <span class="inline-block w-2 h-2 rounded-full bg-gray-300 dark:bg-neutral-600"></span>
+                    {{$t("offline")}}
+                  </span>
+                </div>
+                <p v-if="trafficPeers && !trafficPeers.supported" class="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                  {{$t("trafficPeerUnsupported")}}</p>
+                <p v-else-if="trafficPeers && !trafficPeers.accounting" class="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                  {{$t("trafficPeerNoAcct")}}</p>
+              </div>
+              <div class="px-3 pb-4 pt-1">
+                <div ref="trafficTopologyEl" class="w-full"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- QR Code-->
         <div v-if="qrcode">
           <div class="bg-black bg-opacity-50 fixed top-0 right-0 left-0 bottom-0 flex items-center justify-center z-20">
@@ -764,9 +826,11 @@
   <script src="./js/vendor/vue-i18n.min.js"></script>
   <script src="./js/vendor/apexcharts.min.js"></script>
   <script src="./js/vendor/vue-apexcharts.min.js"></script>
+  <script src="./js/vendor/d3.min.js"></script>
   <script src="./js/vendor/md5.min.js"></script>
   <script src="./js/vendor/sha256.min.js"></script>
   <script src="./js/vendor/timeago.full.min.js"></script>
+  <script src="./js/traffic-topology.js"></script>
   <script src="./js/api.js"></script>
   <script src="./js/i18n.js"></script>
   <script src="./js/app.js"></script>

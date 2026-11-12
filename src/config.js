@@ -69,3 +69,5 @@ iptables -D FORWARD -o wg0 -j ACCEPT;
 module.exports.LANG = process.env.LANG || 'en';
 module.exports.UI_TRAFFIC_STATS = process.env.UI_TRAFFIC_STATS || 'false';
 module.exports.UI_CHART_TYPE = process.env.UI_CHART_TYPE || 0;
+/** When true, skip real WireGuard and serve live mock traffic for UI preview. */
+module.exports.DEMO_TRAFFIC = process.env.DEMO_TRAFFIC === 'true' || process.env.DEMO_TRAFFIC === '1';

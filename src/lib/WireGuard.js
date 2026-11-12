@@ -8,6 +8,7 @@ const QRCode = require('qrcode');
 
 const Util = require('./Util');
 const ServerError = require('./ServerError');
+const PeerFlows = require('./PeerFlows');
 
 const {
   WG_PATH,
@@ -23,11 +24,132 @@ const {
   WG_POST_UP,
   WG_PRE_DOWN,
   WG_POST_DOWN,
+  DEMO_TRAFFIC,
 } = require('../config');
 
 const FENCED_KEEPALIVE = 25;
+// WireGuard data message: 16-byte header + 16-byte auth tag, payload padded to 16 bytes
+const WG_MESSAGE_OVERHEAD = 32;
+const WG_PADDING = 16;
+const PEER_FLOW_MAX_WINDOW_SEC = 5;
+const PEER_FLOW_MIN_INTERVAL_MS = 500;
+
+/** Fixed-looking WireGuard keys for DEMO_TRAFFIC only (not used on the wire). */
+const DEMO_KEY = (seed) => {
+  const buf = crypto.createHash('sha256').update(`wg-easy-demo:${seed}`).digest();
+  return buf.toString('base64');
+};
 
 module.exports = class WireGuard {
+
+  __buildDemoConfig() {
+    const clients = {};
+    const demos = [
+      {
+        name: 'Laptop', address: '10.8.0.2', pattern: 'steady', enabled: true,
+      },
+      {
+        name: 'Phone', address: '10.8.0.3', pattern: 'bursty', enabled: true,
+      },
+      {
+        name: 'NAS', address: '10.8.0.4', pattern: 'heavy', enabled: true,
+      },
+      {
+        name: 'TV', address: '10.8.0.5', pattern: 'idle', enabled: true,
+      },
+      {
+        name: 'Office-PC', address: '10.8.0.6', pattern: 'upload', enabled: true,
+      },
+      {
+        name: 'Tablet', address: '10.8.0.7', pattern: 'download', enabled: true,
+      },
+      {
+        name: 'Spare', address: '10.8.0.8', pattern: 'offline', enabled: false,
+      },
+    ];
+
+    demos.forEach((demo, index) => {
+      const id = crypto.createHash('sha1').update(`demo-client-${index}`).digest('hex')
+        .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*$/, '$1-$2-$3-$4-$5');
+      clients[id] = {
+        id,
+        name: demo.name,
+        address: demo.address,
+        privateKey: DEMO_KEY(`priv:${demo.name}`),
+        publicKey: DEMO_KEY(`pub:${demo.name}`),
+        preSharedKey: DEMO_KEY(`psk:${demo.name}`),
+        createdAt: new Date(Date.now() - (index + 1) * 86400000),
+        updatedAt: new Date(),
+        allowedIPs: [{ type: 'ipv4', address: demo.address, cidr: 32 }],
+        enabled: demo.enabled,
+        fenced: false,
+        __demoPattern: demo.pattern,
+      };
+    });
+
+    return {
+      server: {
+        privateKey: DEMO_KEY('server-priv'),
+        publicKey: DEMO_KEY('server-pub'),
+        address: WG_DEFAULT_ADDRESS.replace('x', '1'),
+      },
+      clients,
+    };
+  }
+
+  __demoTransfer(pattern, elapsedSec) {
+    // cumulative bytes of a rate pulsing between 0 and `amp` B/s; monotonic like real counters
+    const wave = (period, amp) => {
+      const w = (Math.PI * 2) / period;
+      return (amp / 2) * (elapsedSec - Math.sin(w * elapsedSec) / w);
+    };
+    switch (pattern) {
+      case 'steady':
+        return { rx: 42000 * elapsedSec, tx: 18000 * elapsedSec };
+      case 'bursty':
+        return {
+          rx: (8000 * elapsedSec) + wave(11, 1500000),
+          tx: (5000 * elapsedSec) + wave(7, 400000),
+        };
+      case 'heavy':
+        return { rx: 380000 * elapsedSec, tx: 120000 * elapsedSec };
+      case 'idle':
+        return { rx: 120 * elapsedSec, tx: 80 * elapsedSec };
+      case 'upload':
+        return { rx: 15000 * elapsedSec, tx: 520000 * elapsedSec };
+      case 'download':
+        return { rx: 640000 * elapsedSec, tx: 22000 * elapsedSec };
+      case 'offline':
+      default:
+        return { rx: 0, tx: 0 };
+    }
+  }
+
+  async __getDemoClients() {
+    const config = await this.getConfig();
+    const elapsedSec = (Date.now() - this.__demoStartedAt) / 1000;
+
+    return Object.entries(config.clients).map(([clientId, client]) => {
+      const { rx, tx } = this.__demoTransfer(client.__demoPattern, elapsedSec);
+      const online = client.enabled && client.__demoPattern !== 'offline';
+      return {
+        id: clientId,
+        name: client.name,
+        enabled: client.enabled,
+        fenced: false,
+        address: client.address,
+        publicKey: client.publicKey,
+        createdAt: new Date(client.createdAt),
+        updatedAt: new Date(client.updatedAt),
+        allowedIPs: client.allowedIPs,
+        downloadableConfig: true,
+        persistentKeepalive: online ? '25' : null,
+        latestHandshakeAt: online ? new Date(Date.now() - (client.__demoPattern === 'idle' ? 90000 : 8000)) : null,
+        transferRx: Math.floor(rx),
+        transferTx: Math.floor(tx),
+      };
+    });
+  }
 
   async __buildConfig() {
     this.__configPromise = Promise.resolve().then(async () => {
@@ -66,6 +188,16 @@ module.exports = class WireGuard {
   }
 
   async getConfig() {
+    if (DEMO_TRAFFIC) {
+      if (!this.__configPromise) {
+        this.__demoStartedAt = Date.now();
+        this.__configPromise = Promise.resolve(this.__buildDemoConfig());
+        // eslint-disable-next-line no-console
+        console.warn('DEMO_TRAFFIC=1: serving mock peers for UI preview (no WireGuard).');
+      }
+      return this.__configPromise;
+    }
+
     if (!this.__configPromise) {
       const config = await this.__buildConfig();
 
@@ -100,6 +232,7 @@ module.exports = class WireGuard {
   }
 
   async __applyConfig(config) {
+    if (DEMO_TRAFFIC) return;
     await this.__syncFirewall(config);
     await this.__syncConfig();
     await this.__syncRoutes(config);
@@ -244,6 +377,8 @@ module.exports = class WireGuard {
   }
 
   async __saveConfig(config) {
+    // demo data carries well-known keys: never let it reach disk or the interface
+    if (DEMO_TRAFFIC) return;
     let result = `
 # Note: Do not edit this file directly.
 # Your changes will be overwritten!
@@ -295,7 +430,121 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     debug('Config synced.');
   }
 
+  __getDemoPeerFlows(clients) {
+    const byName = new Map(clients.map((client) => [client.name, client.id]));
+    // kept within each demo client's own up/down rates so the totals stay consistent
+    const flows = [
+      ['Tablet', 'Office-PC', 400000, 10000],
+      ['Laptop', 'NAS', 30000, 15000],
+      ['NAS', 'Office-PC', 100000, 3000],
+      ['TV', 'Phone', 60, 50],
+    ];
+    return {
+      supported: true,
+      accounting: true,
+      flows: flows
+        .filter(([a, b]) => byName.has(a) && byName.has(b))
+        .map(([a, b, ab, ba]) => ({
+          a: byName.get(a),
+          b: byName.get(b),
+          ab,
+          ba,
+          abPackets: 0,
+          baPackets: 0,
+          connections: 1,
+        })),
+    };
+  }
+
+  /**
+   * Per-device traffic that is not device-to-device, from WireGuard counters
+   * sampled in the same window as the conntrack flows.
+   */
+  __otherTraffic(clients, peers) {
+    const now = Date.now();
+    const prev = this.__wgPrev;
+    this.__wgPrev = {
+      at: now,
+      counters: new Map(clients.map((c) => [c.id, { rx: c.transferRx || 0, tx: c.transferTx || 0 }])),
+    };
+    const dt = prev ? (now - prev.at) / 1000 : 0;
+    if (!peers.accounting || dt <= 0 || dt > PEER_FLOW_MAX_WINDOW_SEC) return null;
+
+    const peerOut = new Map();
+    const peerIn = new Map();
+    const slack = new Map();
+    const add = (map, id, bytes, packets) => {
+      const avg = packets > 0 ? bytes / packets : 0;
+      const pad = (WG_PADDING - (Math.round(avg) % WG_PADDING)) % WG_PADDING;
+      map.set(id, (map.get(id) || 0) + bytes + packets * (WG_MESSAGE_OVERHEAD + pad));
+      // padding is estimated from the average packet size, so allow one block per packet
+      slack.set(id, (slack.get(id) || 0) + packets * WG_PADDING);
+    };
+    peers.flows.forEach((f) => {
+      add(peerOut, f.a, f.ab, f.abPackets || 0);
+      add(peerIn, f.b, f.ab, f.abPackets || 0);
+      add(peerOut, f.b, f.ba, f.baPackets || 0);
+      add(peerIn, f.a, f.ba, f.baPackets || 0);
+    });
+
+    const residual = (total, peer, tolerance) => {
+      const rest = total - peer;
+      // counters are read a few ms apart and the overhead is estimated: ignore noise
+      return rest > Math.max(512, total * 0.03, tolerance) ? Math.round(rest) : 0;
+    };
+
+    const devices = {};
+    clients.forEach((client) => {
+      const before = prev.counters.get(client.id);
+      if (!before) return;
+      const up = Math.max(0, (client.transferRx || 0) - before.rx) / dt;
+      const down = Math.max(0, (client.transferTx || 0) - before.tx) / dt;
+      devices[client.id] = {
+        otherUp: residual(up, peerOut.get(client.id) || 0, slack.get(client.id) || 0),
+        otherDown: residual(down, peerIn.get(client.id) || 0, slack.get(client.id) || 0),
+      };
+    });
+    return devices;
+  }
+
+  /**
+   * Concurrent callers (several open tabs) share one sample, and samples are
+   * at least PEER_FLOW_MIN_INTERVAL_MS apart, so the conntrack table is read
+   * at a bounded rate and the shared baseline is never raced.
+   */
+  async getPeerFlows() {
+    if (this.__peerFlowsPending) return this.__peerFlowsPending;
+    if (this.__peerFlowsLast && Date.now() - this.__peerFlowsLast.at < PEER_FLOW_MIN_INTERVAL_MS) {
+      return this.__peerFlowsLast.result;
+    }
+    this.__peerFlowsPending = this.__samplePeerFlows()
+      .then((result) => {
+        this.__peerFlowsLast = { at: Date.now(), result };
+        return result;
+      })
+      .finally(() => {
+        this.__peerFlowsPending = null;
+      });
+    return this.__peerFlowsPending;
+  }
+
+  async __samplePeerFlows() {
+    const clients = await this.getClients();
+    let peers;
+    if (DEMO_TRAFFIC) {
+      peers = this.__getDemoPeerFlows(clients);
+    } else {
+      if (!this.__peerFlows) this.__peerFlows = new PeerFlows();
+      peers = await this.__peerFlows.sample(clients);
+    }
+    return { ...peers, devices: this.__otherTraffic(clients, peers) };
+  }
+
   async getClients() {
+    if (DEMO_TRAFFIC) {
+      return this.__getDemoClients();
+    }
+
     const config = await this.getConfig();
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
@@ -524,6 +773,9 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   }
 
   async restoreConfiguration(config) {
+    if (DEMO_TRAFFIC) {
+      throw new ServerError('Restore is disabled in DEMO_TRAFFIC mode', 400);
+    }
     debug('Starting configuration restore process.');
     let _config;
     try {
@@ -549,6 +801,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
 
   // Shutdown wireguard
   async Shutdown() {
+    if (DEMO_TRAFFIC) return;
     await Util.exec('wg-quick down wg0').catch(() => { });
   }
 

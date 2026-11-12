@@ -280,6 +280,9 @@ module.exports = class Server {
             && client.allowedIPs.some((ip) => Util.cidrOverlaps(ip, { address: remote, cidr: 32 })),
         }));
       }))
+      .get('/api/wireguard/traffic/peers', defineEventHandler(() => {
+        return WireGuard.getPeerFlows();
+      }))
       .get('/api/wireguard/client/:clientId/qrcode.svg', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
         const svg = await WireGuard.getClientQRCodeSVG({ clientId });
