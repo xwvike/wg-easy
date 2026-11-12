@@ -13,10 +13,12 @@ module.exports = class AuthLimiter {
     maxAttempts = 5,
     windowMs = 15 * 60 * 1000,
     lockoutMs = 15 * 60 * 1000,
+    maxEntries = 4096,
   } = {}) {
     this.maxAttempts = maxAttempts;
     this.windowMs = windowMs;
     this.lockoutMs = lockoutMs;
+    this.maxEntries = maxEntries;
     /** @type {Map<string, { failures: number[], lockedUntil: number }>} */
     this._entries = new Map();
   }
@@ -24,6 +26,11 @@ module.exports = class AuthLimiter {
   _entry(ip) {
     let entry = this._entries.get(ip);
     if (!entry) {
+      // Bound memory if many distinct IPs probe auth (Map preserves insertion order).
+      if (this._entries.size >= this.maxEntries) {
+        const oldest = this._entries.keys().next().value;
+        this._entries.delete(oldest);
+      }
       entry = { failures: [], lockedUntil: 0 };
       this._entries.set(ip, entry);
     }

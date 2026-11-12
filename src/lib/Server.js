@@ -258,10 +258,15 @@ module.exports = class Server {
     app.use(router2);
 
     router2
-      .delete('/api/session', defineEventHandler((event) => {
+      .delete('/api/session', defineEventHandler(async (event) => {
         const sessionId = event.node.req.session.id;
 
-        event.node.req.session.destroy();
+        await new Promise((resolve, reject) => {
+          event.node.req.session.destroy((err) => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
 
         debug(`Deleted Session: ${sessionId}`);
         return { success: true };
