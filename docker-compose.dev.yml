@@ -12,5 +12,7 @@ services:
       - NET_ADMIN
       - SYS_MODULE
     environment:
-      # - PASSWORD_HASH=p
+      # Required (hash of 'foobar123')
+      - PASSWORD_HASH=$$2y$$10$$hBCoykrB95WSzuV4fafBzOHWKu9sbyVa34GJr8VV5R/pIelfEMYyG
+      - SESSION_SECRET=dev-only-change-me
       - WG_HOST=192.168.100.3

@@ -7,7 +7,25 @@ module.exports.PORT = process.env.PORT || '51821';
 module.exports.WEBUI_HOST = process.env.WEBUI_HOST || '0.0.0.0';
 /** This is only kept for migration purpose. DO NOT USE! */
 module.exports.PASSWORD = process.env.PASSWORD;
+/** Required. Web UI / API will not start without it. */
 module.exports.PASSWORD_HASH = process.env.PASSWORD_HASH;
+/** Optional. Stable across restarts; random if unset (sessions reset on restart). */
+module.exports.SESSION_SECRET = process.env.SESSION_SECRET || null;
+/** Session idle lifetime in milliseconds (default 12h). */
+module.exports.SESSION_MAX_AGE = Number(process.env.SESSION_MAX_AGE) || (12 * 60 * 60 * 1000);
+/**
+ * Cookie Secure flag: 'true' | 'false' | 'auto' (HTTPS request → Secure).
+ * Default 'auto' so plain-HTTP LAN installs still work.
+ */
+module.exports.SECURE_COOKIE = process.env.SECURE_COOKIE || 'auto';
+/** Trust X-Forwarded-* when behind a reverse proxy (also used for client IP). */
+module.exports.TRUST_PROXY = process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1';
+/** Failed login / Authorization attempts before lockout. */
+module.exports.LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS) || 5;
+/** Sliding window for counting failures (ms). */
+module.exports.LOGIN_WINDOW_MS = Number(process.env.LOGIN_WINDOW_MS) || (15 * 60 * 1000);
+/** Lockout duration after too many failures (ms). */
+module.exports.LOGIN_LOCKOUT_MS = Number(process.env.LOGIN_LOCKOUT_MS) || (15 * 60 * 1000);
 module.exports.WG_PATH = process.env.WG_PATH || '/etc/wireguard/';
 module.exports.WG_DEVICE = process.env.WG_DEVICE || 'eth0';
 module.exports.WG_HOST = process.env.WG_HOST;

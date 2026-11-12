@@ -20,11 +20,13 @@ const {
   readBody,
   send,
   setHeader,
+  setResponseHeader,
   serveStatic,
 } = require('h3');
 
 const WireGuard = require('../services/WireGuard');
 const Util = require('./Util');
+const AuthLimiter = require('./AuthLimiter');
 
 const {
   PORT,
@@ -32,36 +34,104 @@ const {
   RELEASE,
   PASSWORD,
   PASSWORD_HASH,
+  SESSION_SECRET,
+  SESSION_MAX_AGE,
+  SECURE_COOKIE,
+  TRUST_PROXY,
+  LOGIN_MAX_ATTEMPTS,
+  LOGIN_WINDOW_MS,
+  LOGIN_LOCKOUT_MS,
   LANG,
   UI_TRAFFIC_STATS,
   UI_CHART_TYPE,
 } = require('../config');
 
-const requiresPassword = !!PASSWORD_HASH;
+if (PASSWORD) {
+  throw new Error('DO NOT USE PASSWORD ENVIRONMENT VARIABLE. USE PASSWORD_HASH INSTEAD.\nSee https://github.com/wg-easy/wg-easy/blob/v14/How_to_generate_an_bcrypt_hash.md');
+}
+
+if (!PASSWORD_HASH) {
+  throw new Error('PASSWORD_HASH environment variable is required. The Web UI must not run without authentication.\nSee https://github.com/wg-easy/wg-easy/blob/v14/How_to_generate_an_bcrypt_hash.md');
+}
+
+const sessionSecret = SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+if (!SESSION_SECRET) {
+  // eslint-disable-next-line no-console
+  console.warn('SESSION_SECRET is not set; sessions will reset whenever the process restarts. Set SESSION_SECRET for stable sessions.');
+}
+
+const authLimiter = new AuthLimiter({
+  maxAttempts: LOGIN_MAX_ATTEMPTS,
+  windowMs: LOGIN_WINDOW_MS,
+  lockoutMs: LOGIN_LOCKOUT_MS,
+});
 
 /**
- * Checks if `password` matches the PASSWORD_HASH.
- *
- * If environment variable is not set, the password is always invalid.
- *
- * @param {string} password String to test
- * @returns {boolean} true if matching environment, otherwise false
+ * @param {import('node:http').IncomingMessage} req
+ * @returns {string}
  */
-const isPasswordValid = (password) => {
-  if (typeof password !== 'string') {
+const clientIp = (req) => {
+  if (TRUST_PROXY) {
+    const xff = req.headers['x-forwarded-for'];
+    if (typeof xff === 'string' && xff.length > 0) {
+      return xff.split(',')[0].trim() || 'unknown';
+    }
+  }
+  return (req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
+};
+
+/**
+ * @param {string} password
+ * @returns {Promise<boolean>}
+ */
+const isPasswordValid = async (password) => {
+  if (typeof password !== 'string' || password.length === 0) {
     return false;
   }
-
-  if (PASSWORD_HASH) {
-    return bcrypt.compareSync(password, PASSWORD_HASH);
+  try {
+    return await bcrypt.compare(password, PASSWORD_HASH);
+  } catch {
+    return false;
   }
-
-  return false;
 };
+
+/**
+ * @param {import('h3').H3Event} event
+ * @param {number} retryAfterSec
+ */
+const throwRateLimited = (event, retryAfterSec) => {
+  setResponseHeader(event, 'Retry-After', String(retryAfterSec));
+  throw createError({
+    status: 429,
+    message: 'Too Many Attempts',
+  });
+};
+
+/**
+ * Regenerate the session id (session fixation defense) and mark authenticated.
+ * Must use `req.session` after regenerate — the old object is discarded.
+ *
+ * @param {import('node:http').IncomingMessage & { session: import('express-session').Session }} req
+ * @returns {Promise<void>}
+ */
+const regenerateSession = (req) => new Promise((resolve, reject) => {
+  req.session.regenerate((err) => {
+    if (err) return reject(err);
+    req.session.authenticated = true;
+    req.session.save((saveErr) => {
+      if (saveErr) return reject(saveErr);
+      resolve();
+    });
+  });
+});
 
 module.exports = class Server {
 
   constructor() {
+    let secureCookie = 'auto';
+    if (SECURE_COOKIE === 'true') secureCookie = true;
+    if (SECURE_COOKIE === 'false') secureCookie = false;
+
     const app = createApp({
       onError: (error, event) => {
         if (error.statusCode >= 500) {
@@ -74,9 +144,17 @@ module.exports = class Server {
     this.app = app;
 
     app.use(fromNodeMiddleware(expressSession({
-      secret: crypto.randomBytes(256).toString('hex'),
-      resave: true,
-      saveUninitialized: true,
+      name: 'wg-easy.sid',
+      secret: sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      proxy: TRUST_PROXY,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'strict',
+        secure: secureCookie,
+        maxAge: SESSION_MAX_AGE,
+      },
     })));
 
     const router = createRouter();
@@ -105,47 +183,47 @@ module.exports = class Server {
 
       // Authentication
       .get('/api/session', defineEventHandler((event) => {
-        const authenticated = requiresPassword
-          ? !!(event.node.req.session && event.node.req.session.authenticated)
-          : true;
+        const authenticated = !!(event.node.req.session && event.node.req.session.authenticated);
 
         return {
-          requiresPassword,
+          requiresPassword: true,
           authenticated,
         };
       }))
       .post('/api/session', defineEventHandler(async (event) => {
-        const { password } = await readBody(event);
-
-        if (!requiresPassword) {
-          // if no password is required, the API should never be called.
-          // Do not automatically authenticate the user.
-          throw createError({
-            status: 401,
-            message: 'Invalid state',
-          });
+        const ip = clientIp(event.node.req);
+        const limited = authLimiter.check(ip);
+        if (!limited.ok) {
+          throwRateLimited(event, limited.retryAfterSec);
         }
 
-        if (!isPasswordValid(password)) {
+        const body = await readBody(event).catch(() => ({}));
+        const password = body?.password;
+
+        if (!(await isPasswordValid(password))) {
+          const result = authLimiter.fail(ip);
+          if (result.locked) {
+            throwRateLimited(event, result.retryAfterSec);
+          }
           throw createError({
             status: 401,
             message: 'Incorrect Password',
           });
         }
 
-        event.node.req.session.authenticated = true;
-        event.node.req.session.save();
+        authLimiter.succeed(ip);
+        await regenerateSession(event.node.req);
 
         debug(`New Session: ${event.node.req.session.id}`);
 
         return { success: true };
       }));
 
-    // WireGuard
+    // WireGuard API auth
     app.use(
-      defineEventHandler((event) => {
+      defineEventHandler(async (event) => {
         const { req } = event.node;
-        if (!requiresPassword || !req.url.startsWith('/api/')) {
+        if (!req.url.startsWith('/api/')) {
           return;
         }
 
@@ -154,8 +232,20 @@ module.exports = class Server {
         }
 
         if (req.headers['authorization']) {
-          if (isPasswordValid(req.headers['authorization'])) {
+          const ip = clientIp(req);
+          const limited = authLimiter.check(ip);
+          if (!limited.ok) {
+            throwRateLimited(event, limited.retryAfterSec);
+          }
+
+          if (await isPasswordValid(req.headers['authorization'])) {
+            authLimiter.succeed(ip);
             return;
+          }
+
+          const result = authLimiter.fail(ip);
+          if (result.locked) {
+            throwRateLimited(event, result.retryAfterSec);
           }
           throw createError({ status: 401, message: 'Incorrect Password' });
         }
@@ -320,10 +410,6 @@ module.exports = class Server {
         });
       }),
     );
-
-    if (PASSWORD) {
-      throw new Error('DO NOT USE PASSWORD ENVIRONMENT VARIABLE. USE PASSWORD_HASH INSTEAD.\nSee https://github.com/wg-easy/wg-easy/blob/v14/How_to_generate_an_bcrypt_hash.md');
-    }
 
     createServer(toNodeListener(app)).listen(PORT, WEBUI_HOST);
     debug(`Listening on http://${WEBUI_HOST}:${PORT}`);
