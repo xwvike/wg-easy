@@ -204,7 +204,8 @@ module.exports = class PeerFlows {
     this.prevAt = now;
 
     const flows = [...pairs.values()]
-      .filter((pair) => (accounting ? pair.ab > 0 || pair.ba > 0 : pair.connections > 0))
+      // idle but established pairs are kept so the UI can show who is connected
+      .filter((pair) => pair.connections > 0 || pair.ab > 0 || pair.ba > 0)
       .map((pair) => ({
         a: pair.a,
         b: pair.b,

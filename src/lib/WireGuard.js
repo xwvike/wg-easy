@@ -438,6 +438,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
       ['Laptop', 'NAS', 30000, 15000],
       ['NAS', 'Office-PC', 100000, 3000],
       ['TV', 'Phone', 60, 50],
+      ['Laptop', 'TV', 0, 0],
     ];
     return {
       supported: true,
