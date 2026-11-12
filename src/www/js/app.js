@@ -72,6 +72,8 @@ new Vue({
     latestRelease: null,
 
     uiTrafficStats: false,
+    uiView: localStorage.getItem('uiView') || 'traffic',
+    trafficFocusId: null,
 
     uiChartType: 0,
     uiShowCharts: localStorage.getItem('uiShowCharts') === '1',
@@ -168,6 +170,14 @@ new Vue({
         hour: 'numeric',
         minute: 'numeric',
       }).format(value);
+    },
+    setView(view) {
+      this.uiView = view;
+      localStorage.setItem('uiView', view);
+    },
+    isClientOnline(client) {
+      if (!client || !client.enabled || !client.latestHandshakeAt) return false;
+      return (Date.now() - new Date(client.latestHandshakeAt).getTime()) < 180000;
     },
     async refresh({
       updateCharts = false,
@@ -502,6 +512,52 @@ new Vue({
         return this.prefersDarkScheme.matches ? 'dark' : 'light';
       }
       return this.uiTheme;
+    },
+    trafficClients() {
+      return (this.clients || []).slice().sort((a, b) => {
+        const ar = Math.max(0, a.transferRxCurrent || 0) + Math.max(0, a.transferTxCurrent || 0);
+        const br = Math.max(0, b.transferRxCurrent || 0) + Math.max(0, b.transferTxCurrent || 0);
+        return br - ar;
+      });
+    },
+    trafficTotalRate() {
+      return (this.clients || []).reduce((sum, client) => {
+        return sum
+          + Math.max(0, client.transferRxCurrent || 0)
+          + Math.max(0, client.transferTxCurrent || 0);
+      }, 0);
+    },
+    topologyLayout() {
+      const clients = this.clients || [];
+      const cx = 400;
+      const cy = 230;
+      const rx = 290;
+      const ry = 155;
+      const rates = clients.map((client) => (
+        Math.max(0, client.transferRxCurrent || 0) + Math.max(0, client.transferTxCurrent || 0)
+      ));
+      const maxRate = Math.max(1, ...rates, 1);
+      const nodes = clients.map((client, index) => {
+        const angle = clients.length === 0
+          ? 0
+          : ((index / clients.length) * Math.PI * 2) - (Math.PI / 2);
+        const rate = rates[index];
+        const rateNorm = Math.min(1, rate / maxRate);
+        return {
+          id: client.id,
+          name: client.name,
+          x: cx + (Math.cos(angle) * rx),
+          y: cy + (Math.sin(angle) * ry),
+          rate,
+          rateNorm,
+          online: this.isClientOnline(client),
+          particleCount: rate > 0 ? Math.max(1, Math.round(1 + (rateNorm * 3))) : 0,
+          duration: Number((3.8 - (rateNorm * 2.4)).toFixed(2)),
+        };
+      });
+      return {
+        cx, cy, nodes, maxRate,
+      };
     },
   },
 });

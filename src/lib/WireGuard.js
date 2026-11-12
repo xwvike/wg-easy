@@ -23,11 +23,127 @@ const {
   WG_POST_UP,
   WG_PRE_DOWN,
   WG_POST_DOWN,
+  DEMO_TRAFFIC,
 } = require('../config');
 
 const FENCED_KEEPALIVE = 25;
 
+/** Fixed-looking WireGuard keys for DEMO_TRAFFIC only (not used on the wire). */
+const DEMO_KEY = (seed) => {
+  const buf = crypto.createHash('sha256').update(`wg-easy-demo:${seed}`).digest();
+  return buf.toString('base64');
+};
+
 module.exports = class WireGuard {
+
+  __buildDemoConfig() {
+    const clients = {};
+    const demos = [
+      {
+        name: 'Laptop', address: '10.8.0.2', pattern: 'steady', enabled: true,
+      },
+      {
+        name: 'Phone', address: '10.8.0.3', pattern: 'bursty', enabled: true,
+      },
+      {
+        name: 'NAS', address: '10.8.0.4', pattern: 'heavy', enabled: true,
+      },
+      {
+        name: 'TV', address: '10.8.0.5', pattern: 'idle', enabled: true,
+      },
+      {
+        name: 'Office-PC', address: '10.8.0.6', pattern: 'upload', enabled: true,
+      },
+      {
+        name: 'Tablet', address: '10.8.0.7', pattern: 'download', enabled: true,
+      },
+      {
+        name: 'Spare', address: '10.8.0.8', pattern: 'offline', enabled: false,
+      },
+    ];
+
+    demos.forEach((demo, index) => {
+      const id = crypto.createHash('sha1').update(`demo-client-${index}`).digest('hex')
+        .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*$/, '$1-$2-$3-$4-$5');
+      clients[id] = {
+        id,
+        name: demo.name,
+        address: demo.address,
+        privateKey: DEMO_KEY(`priv:${demo.name}`),
+        publicKey: DEMO_KEY(`pub:${demo.name}`),
+        preSharedKey: DEMO_KEY(`psk:${demo.name}`),
+        createdAt: new Date(Date.now() - (index + 1) * 86400000),
+        updatedAt: new Date(),
+        allowedIPs: [{ type: 'ipv4', address: demo.address, cidr: 32 }],
+        enabled: demo.enabled,
+        fenced: false,
+        __demoPattern: demo.pattern,
+      };
+    });
+
+    return {
+      server: {
+        privateKey: DEMO_KEY('server-priv'),
+        publicKey: DEMO_KEY('server-pub'),
+        address: WG_DEFAULT_ADDRESS.replace('x', '1'),
+      },
+      clients,
+    };
+  }
+
+  __demoTransfer(pattern, elapsedSec) {
+    const wave = (period, amp) => {
+      const phase = (elapsedSec / period) * Math.PI * 2;
+      return ((Math.sin(phase) + 1) / 2) * amp;
+    };
+    switch (pattern) {
+      case 'steady':
+        return { rx: 42000 * elapsedSec, tx: 18000 * elapsedSec };
+      case 'bursty':
+        return {
+          rx: (8000 * elapsedSec) + wave(11, 2500000),
+          tx: (5000 * elapsedSec) + wave(7, 900000),
+        };
+      case 'heavy':
+        return { rx: 380000 * elapsedSec, tx: 120000 * elapsedSec };
+      case 'idle':
+        return { rx: 120 * elapsedSec, tx: 80 * elapsedSec };
+      case 'upload':
+        return { rx: 15000 * elapsedSec, tx: 520000 * elapsedSec };
+      case 'download':
+        return { rx: 640000 * elapsedSec, tx: 22000 * elapsedSec };
+      case 'offline':
+      default:
+        return { rx: 0, tx: 0 };
+    }
+  }
+
+  async __getDemoClients() {
+    const config = await this.getConfig();
+    const elapsedSec = (Date.now() - this.__demoStartedAt) / 1000;
+
+    return Object.entries(config.clients).map(([clientId, client]) => {
+      const { rx, tx } = this.__demoTransfer(client.__demoPattern, elapsedSec);
+      const online = client.enabled && client.__demoPattern !== 'offline';
+      return {
+        id: clientId,
+        name: client.name,
+        enabled: client.enabled,
+        fenced: false,
+        address: client.address,
+        publicKey: client.publicKey,
+        createdAt: new Date(client.createdAt),
+        updatedAt: new Date(client.updatedAt),
+        allowedIPs: client.allowedIPs,
+        downloadableConfig: true,
+        persistentKeepalive: online ? '25' : null,
+        latestHandshakeAt: online ? new Date(Date.now() - (client.__demoPattern === 'idle' ? 90000 : 8000)) : null,
+        transferRx: Math.floor(rx),
+        transferTx: Math.floor(tx),
+        endpoint: online ? `203.0.113.${client.address.split('.').pop()}:51820` : null,
+      };
+    });
+  }
 
   async __buildConfig() {
     this.__configPromise = Promise.resolve().then(async () => {
@@ -66,6 +182,16 @@ module.exports = class WireGuard {
   }
 
   async getConfig() {
+    if (DEMO_TRAFFIC) {
+      if (!this.__configPromise) {
+        this.__demoStartedAt = Date.now();
+        this.__configPromise = Promise.resolve(this.__buildDemoConfig());
+        // eslint-disable-next-line no-console
+        console.warn('DEMO_TRAFFIC=1: serving mock peers for UI preview (no WireGuard).');
+      }
+      return this.__configPromise;
+    }
+
     if (!this.__configPromise) {
       const config = await this.__buildConfig();
 
@@ -296,6 +422,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
   }
 
   async getClients() {
+    if (DEMO_TRAFFIC) {
+      return this.__getDemoClients();
+    }
+
     const config = await this.getConfig();
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
@@ -312,6 +442,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
       latestHandshakeAt: null,
       transferRx: null,
       transferTx: null,
+      endpoint: null,
     }));
 
     // Loop WireGuard status
@@ -326,7 +457,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
         const [
           publicKey,
           preSharedKey, // eslint-disable-line no-unused-vars
-          endpoint, // eslint-disable-line no-unused-vars
+          endpoint,
           allowedIps, // eslint-disable-line no-unused-vars
           latestHandshakeAt,
           transferRx,
@@ -343,6 +474,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
         client.transferRx = Number(transferRx);
         client.transferTx = Number(transferTx);
         client.persistentKeepalive = persistentKeepalive;
+        client.endpoint = endpoint && endpoint !== '(none)' ? endpoint : null;
       });
 
     return clients;

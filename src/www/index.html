@@ -20,11 +20,36 @@
   .line-chart .apexcharts-svg {
     transform: translateY(3px);
   }
+
+  .traffic-topo {
+    background:
+      radial-gradient(ellipse at center, rgba(153, 27, 27, 0.08), transparent 55%),
+      linear-gradient(180deg, rgba(0, 0, 0, 0.02), transparent);
+  }
+
+  .dark .traffic-topo {
+    background:
+      radial-gradient(ellipse at center, rgba(248, 113, 113, 0.08), transparent 55%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+  }
+
+  .traffic-flow-dot {
+    filter: drop-shadow(0 0 3px rgba(185, 28, 28, 0.65));
+  }
+
+  .traffic-row-active {
+    background: rgba(153, 27, 27, 0.06);
+  }
+
+  .dark .traffic-row-active {
+    background: rgba(248, 113, 113, 0.08);
+  }
 </style>
 
 <body class="bg-gray-50 dark:bg-neutral-800">
   <div id="app">
-    <div v-cloak class="container mx-auto max-w-3xl px-3 md:px-0 mt-4 xs:mt-6">
+    <div v-cloak class="container mx-auto px-3 md:px-0 mt-4 xs:mt-6"
+      :class="uiView === 'traffic' ? 'max-w-5xl' : 'max-w-3xl'">
       <div v-if="authenticated === true">
         <div class="flex flex-col-reverse xxs:flex-row flex-auto items-center items-end gap-3">
           <h1 class="text-4xl dark:text-neutral-200 font-medium flex-grow self-start mb-4">
@@ -95,7 +120,158 @@
           </div>
         </div>
 
-        <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
+        <div class="inline-flex rounded-full border-2 border-gray-100 dark:border-neutral-600 overflow-hidden mb-4">
+          <button type="button" @click="setView('clients')"
+            class="px-4 py-1.5 text-sm transition"
+            :class="uiView === 'clients' ? 'bg-red-800 text-white' : 'bg-white dark:bg-neutral-700 text-gray-600 dark:text-neutral-300 hover:bg-gray-50 dark:hover:bg-neutral-600'">
+            {{$t("clients")}}
+          </button>
+          <button type="button" @click="setView('traffic')"
+            class="px-4 py-1.5 text-sm transition border-l-2 border-gray-100 dark:border-neutral-600"
+            :class="uiView === 'traffic' ? 'bg-red-800 text-white' : 'bg-white dark:bg-neutral-700 text-gray-600 dark:text-neutral-300 hover:bg-gray-50 dark:hover:bg-neutral-600'">
+            {{$t("traffic")}}
+          </button>
+        </div>
+
+        <!-- Traffic topology + device list -->
+        <div v-if="uiView === 'traffic'" class="space-y-4 mb-10">
+          <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
+            <div class="flex flex-row items-center justify-between p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
+              <div>
+                <p class="text-2xl font-medium dark:text-neutral-200">{{$t("trafficTopology")}}</p>
+                <p class="text-xs text-gray-400 dark:text-neutral-400 mt-0.5">{{$t("trafficTopologyHint")}}</p>
+              </div>
+              <div class="text-right text-xs text-gray-400 dark:text-neutral-400">
+                <div>{{$t("live")}}</div>
+                <div class="font-mono text-gray-600 dark:text-neutral-200">{{ trafficTotalRate | bytes }}/s</div>
+              </div>
+            </div>
+            <div class="traffic-topo relative">
+              <svg viewBox="0 0 800 460" class="w-full h-auto block select-none" role="img"
+                xmlns:xlink="http://www.w3.org/1999/xlink" :aria-label="$t('trafficTopology')">
+                <defs>
+                  <linearGradient id="trafficEdge" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#991b1b" stop-opacity="0.15" />
+                    <stop offset="50%" stop-color="#b91c1c" stop-opacity="0.85" />
+                    <stop offset="100%" stop-color="#991b1b" stop-opacity="0.15" />
+                  </linearGradient>
+                </defs>
+
+                <!-- links -->
+                <g v-for="node in topologyLayout.nodes" :key="'link-' + node.id">
+                  <path :id="'traffic-path-' + node.id"
+                    :d="'M ' + node.x + ' ' + node.y + ' Q ' + topologyLayout.cx + ' ' + ((node.y + topologyLayout.cy) / 2) + ' ' + topologyLayout.cx + ' ' + topologyLayout.cy"
+                    fill="none" stroke="url(#trafficEdge)"
+                    :stroke-width="node.online ? (1.5 + 7 * node.rateNorm) : 1"
+                    :opacity="node.online ? (0.35 + 0.55 * node.rateNorm) : 0.12"
+                    stroke-linecap="round" />
+                  <g v-if="node.online && node.rate > 0">
+                    <circle v-for="n in node.particleCount" :key="'dot-' + node.id + '-' + n"
+                      class="traffic-flow-dot" r="3.2"
+                      :fill="n % 2 === 0 ? '#b91c1c' : '#f87171'">
+                      <animateMotion
+                        :dur="node.duration + 's'"
+                        :begin="((n - 1) * node.duration / node.particleCount) + 's'"
+                        repeatCount="indefinite"
+                        :keyPoints="n % 2 === 0 ? '0;1' : '1;0'"
+                        keyTimes="0;1"
+                        calcMode="linear">
+                        <mpath v-bind="{'xlink:href': '#traffic-path-' + node.id}" />
+                      </animateMotion>
+                    </circle>
+                  </g>
+                </g>
+
+                <!-- hub -->
+                <circle :cx="topologyLayout.cx" :cy="topologyLayout.cy" r="28" fill="#991b1b" opacity="0.35">
+                  <animate attributeName="r" values="26;36;26" dur="2.4s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0.2;0.5;0.2" dur="2.4s" repeatCount="indefinite" />
+                </circle>
+                <circle :cx="topologyLayout.cx" :cy="topologyLayout.cy" r="22" fill="#991b1b" />
+                <text :x="topologyLayout.cx" :y="topologyLayout.cy + 5" text-anchor="middle"
+                  fill="#ffffff" font-size="11" font-weight="600">VPN</text>
+
+                <!-- nodes -->
+                <g v-for="node in topologyLayout.nodes" :key="'node-' + node.id"
+                  class="cursor-pointer" @click="trafficFocusId = node.id">
+                  <circle :cx="node.x" :cy="node.y" r="18"
+                    :fill="trafficFocusId === node.id ? '#991b1b' : (node.online ? (theme === 'dark' ? '#e5e5e5' : '#374151') : (theme === 'dark' ? '#525252' : '#d1d5db'))" />
+                  <circle v-if="node.online" :cx="node.x + 12" :cy="node.y - 12" r="4" fill="#10b981" />
+                  <text :x="node.x" :y="node.y + 34" text-anchor="middle"
+                    :fill="theme === 'dark' ? '#d4d4d4' : '#4b5563'" font-size="11">{{ node.name }}</text>
+                  <text v-if="node.online" :x="node.x" :y="node.y + 48" text-anchor="middle"
+                    :fill="theme === 'dark' ? '#a3a3a3' : '#9ca3af'" font-size="10" font-family="ui-monospace, monospace">{{ node.rate | bytes }}/s</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+
+          <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
+            <div class="flex flex-row items-center p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
+              <p class="text-2xl font-medium dark:text-neutral-200 flex-grow">{{$t("trafficDevices")}}</p>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-sm">
+                <thead class="text-left text-xs uppercase tracking-wide text-gray-400 dark:text-neutral-400 border-b border-gray-100 dark:border-neutral-600">
+                  <tr>
+                    <th class="px-4 py-3 font-medium">{{$t("name")}}</th>
+                    <th class="px-4 py-3 font-medium">{{$t("status")}}</th>
+                    <th class="px-4 py-3 font-medium">{{$t("rateDown")}}</th>
+                    <th class="px-4 py-3 font-medium">{{$t("rateUp")}}</th>
+                    <th class="px-4 py-3 font-medium">{{$t("totalDownload")}}</th>
+                    <th class="px-4 py-3 font-medium">{{$t("totalUpload")}}</th>
+                    <th class="px-4 py-3 font-medium">{{$t("endpoint")}}</th>
+                    <th class="px-4 py-3 font-medium">{{$t("lastSeen")}}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="client in trafficClients" :key="'traffic-' + client.id"
+                    class="border-b last:border-b-0 border-gray-100 dark:border-neutral-600 cursor-pointer hover:bg-gray-50 dark:hover:bg-neutral-600/40 transition"
+                    :class="trafficFocusId === client.id ? 'traffic-row-active' : ''"
+                    @click="trafficFocusId = client.id">
+                    <td class="px-4 py-3">
+                      <div class="font-medium text-gray-800 dark:text-neutral-100">{{ client.name }}</div>
+                      <div class="text-xs text-gray-400 dark:text-neutral-400 font-mono">{{ client.address }}</div>
+                    </td>
+                    <td class="px-4 py-3">
+                      <span v-if="isClientOnline(client)"
+                        class="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>{{$t("online")}}
+                      </span>
+                      <span v-else class="text-gray-400 dark:text-neutral-500">{{$t("offline")}}</span>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-gray-700 dark:text-neutral-200">
+                      {{ Math.max(0, client.transferRxCurrent || 0) | bytes }}/s
+                    </td>
+                    <td class="px-4 py-3 font-mono text-gray-700 dark:text-neutral-200">
+                      {{ Math.max(0, client.transferTxCurrent || 0) | bytes }}/s
+                    </td>
+                    <td class="px-4 py-3 font-mono text-gray-500 dark:text-neutral-400">
+                      {{ (client.transferRx || 0) | bytes }}
+                    </td>
+                    <td class="px-4 py-3 font-mono text-gray-500 dark:text-neutral-400">
+                      {{ (client.transferTx || 0) | bytes }}
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs text-gray-500 dark:text-neutral-400">
+                      {{ client.endpoint || '—' }}
+                    </td>
+                    <td class="px-4 py-3 text-gray-500 dark:text-neutral-400 whitespace-nowrap">
+                      <span v-if="client.latestHandshakeAt">{{ client.latestHandshakeAt | timeago }}</span>
+                      <span v-else>—</span>
+                    </td>
+                  </tr>
+                  <tr v-if="!clients || clients.length === 0">
+                    <td colspan="8" class="px-4 py-10 text-center text-gray-400 dark:text-neutral-400">
+                      {{$t("noClients")}}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div v-show="uiView === 'clients'" class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
           <div class="flex flex-row flex-auto items-center p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
             <div class="flex-grow">
               <p class="text-2xl font-medium dark:text-neutral-200">{{$t("clients")}}</p>
