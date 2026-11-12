@@ -7,11 +7,13 @@ const debug = require('debug')('PeerFlows');
 const Util = require('./Util');
 
 const CONNTRACK_PATH = '/proc/net/nf_conntrack';
+const CONNTRACK_ACCT_PATH = '/proc/sys/net/netfilter/nf_conntrack_acct';
 // bounds CPU/memory per sample when the table is huge (e.g. a peer opening many connections)
 const MAX_LINES = 50000;
 // a gap longer than this (e.g. modal closed) restarts the baseline instead of averaging
 const MAX_WINDOW_SEC = 5;
 const CLOSING_STATES = /\s(TIME_WAIT|CLOSE|CLOSE_WAIT|FIN_WAIT|LAST_ACK)\s/;
+const HAS_BYTES = /\sbytes=\d+/;
 
 /**
  * Parses one /proc/net/nf_conntrack line into its original and reply tuples.
@@ -114,6 +116,22 @@ module.exports = class PeerFlows {
   }
 
   /**
+   * Prefer the kernel switch; fall back to whether the table itself carries
+   * bytes= fields (any connection, not only device-to-device ones). Relying on
+   * peer pairs alone false-reports "acct off" when peers are idle.
+   */
+  static async accountingEnabled(lines) {
+    try {
+      const value = await fs.promises.readFile(CONNTRACK_ACCT_PATH, 'utf8');
+      if (value.trim() === '1') return true;
+      if (value.trim() === '0') return false;
+    } catch (err) {
+      debug(`nf_conntrack_acct unavailable: ${err.message}`);
+    }
+    return lines.some((line) => HAS_BYTES.test(line));
+  }
+
+  /**
    * @param {Array<{id: string, address: string, allowedIPs?: Array}>} clients
    */
   async sample(clients) {
@@ -126,6 +144,7 @@ module.exports = class PeerFlows {
       return { supported: false, accounting: false, flows: [] };
     }
 
+    const accounting = await PeerFlows.accountingEnabled(lines);
     const now = Date.now();
     const elapsed = this.prevAt ? (now - this.prevAt) / 1000 : 0;
     const dt = elapsed <= MAX_WINDOW_SEC ? elapsed : 0;
@@ -137,7 +156,6 @@ module.exports = class PeerFlows {
 
     const next = new Map();
     const pairs = new Map();
-    let accounting = false;
 
     for (let i = 0; i < lines.length; i += 1) {
       const entry = parseLine(lines[i]);
@@ -147,8 +165,6 @@ module.exports = class PeerFlows {
       if (!from || !to || from === to) continue;
 
       const hasBytes = Number.isFinite(entry.origBytes) && Number.isFinite(entry.replyBytes);
-      if (hasBytes) accounting = true;
-
       const [a, b] = from < to ? [from, to] : [to, from];
       const pairKey = `${a}|${b}`;
       if (!pairs.has(pairKey)) {
