@@ -43,10 +43,15 @@
             <button @click="openTrafficTopology()"
               class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition"
               :title="$t('trafficTopology')">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                stroke="currentColor" class="w-5 h-5 text-gray-600 dark:text-neutral-400">
-                <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M7.5 7.5h-.75A2.25 2.25 0 0 0 4.5 9.75v7.5a2.25 2.25 0 0 0 2.25 2.25h7.5a2.25 2.25 0 0 0 2.25-2.25v-7.5a2.25 2.25 0 0 0-2.25-2.25h-.75m-6 3.75 3 3m0 0 3-3m-3 3V3.75m9 13.5h.75a2.25 2.25 0 0 0 2.25-2.25V8.25a2.25 2.25 0 0 0-2.25-2.25h-7.5a2.25 2.25 0 0 0-2.25 2.25v.75" />
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6"
+                stroke="currentColor" class="w-5 h-5 dark:text-neutral-400">
+                <circle cx="12" cy="12" r="2.75" />
+                <circle cx="5" cy="5" r="2" />
+                <circle cx="19" cy="5" r="2" />
+                <circle cx="5" cy="19" r="2" />
+                <circle cx="19" cy="19" r="2" />
+                <path stroke-linecap="round" d="M6.5 6.5l3.5 3.5M17.5 6.5 14 10M6.5 17.5l3.5-3.5M17.5 17.5 14 14" />
+                <path stroke-linecap="round" stroke-dasharray="1 2.2" d="M7.5 19h9" />
               </svg>
             </button>
             <!-- Dark / light theme -->
@@ -444,22 +449,22 @@
                 <p class="text-xl font-medium dark:text-neutral-100">{{$t("trafficTopology")}}</p>
                 <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-gray-500 dark:text-neutral-400">
                   <span class="inline-flex items-center gap-1.5">
-                    <span class="inline-block w-2 h-2 rounded-full bg-red-600 dark:bg-red-400"></span>
-                    {{$t("rateUp")}}
+                    <svg class="w-5 h-2" viewBox="0 0 20 8"><path d="M1 6 Q10 -2 19 6" fill="none" stroke="#4e79a7" stroke-width="2" stroke-linecap="round" /></svg>
+                    {{$t("trafficPeerLink")}}
                   </span>
                   <span class="inline-flex items-center gap-1.5">
-                    <span class="inline-block w-2 h-2 rounded-full bg-amber-600 dark:bg-amber-400"></span>
-                    {{$t("rateDown")}}
-                  </span>
-                  <span class="inline-flex items-center gap-1.5">
-                    <span class="inline-block w-2 h-2 rounded-full border-2 border-emerald-500"></span>
-                    {{$t("online")}}
+                    <svg class="w-5 h-2" viewBox="0 0 20 8"><path d="M1 6 Q10 -2 19 6" fill="none" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" stroke-linecap="round" /></svg>
+                    {{$t("trafficViaVpn")}}
                   </span>
                   <span class="inline-flex items-center gap-1.5">
                     <span class="inline-block w-2 h-2 rounded-full bg-gray-300 dark:bg-neutral-600"></span>
                     {{$t("offline")}}
                   </span>
                 </div>
+                <p v-if="trafficPeers && !trafficPeers.supported" class="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                  {{$t("trafficPeerUnsupported")}}</p>
+                <p v-else-if="trafficPeers && !trafficPeers.accounting" class="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                  {{$t("trafficPeerNoAcct")}}</p>
               </div>
               <div class="px-3 pb-4 pt-1">
                 <div ref="trafficTopologyEl" class="w-full"></div>

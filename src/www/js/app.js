@@ -74,6 +74,7 @@ new Vue({
     uiTrafficStats: false,
     trafficModalOpen: false,
     trafficChart: null,
+    trafficPeers: null,
 
     uiChartType: 0,
     uiShowCharts: localStorage.getItem('uiShowCharts') === '1',
@@ -193,12 +194,19 @@ new Vue({
         dark: this.theme === 'dark',
         formatRate: (n) => bytes(Math.max(0, n || 0)),
       });
-      this.trafficChart.update(this.clients || []);
+      this.trafficChart.update(this.clients || [], this.trafficPeers);
+      this.refreshTrafficTopology();
     },
-    refreshTrafficTopology() {
+    async refreshTrafficTopology() {
       if (!this.trafficModalOpen || !this.trafficChart) return;
+      try {
+        this.trafficPeers = await this.api.getPeerFlows();
+      } catch (err) {
+        this.trafficPeers = null;
+      }
+      if (!this.trafficChart) return;
       this.trafficChart.setDark(this.theme === 'dark');
-      this.trafficChart.update(this.clients || []);
+      this.trafficChart.update(this.clients || [], this.trafficPeers);
     },
     async refresh({
       updateCharts = false,
