@@ -28,6 +28,10 @@ const {
 } = require('../config');
 
 const FENCED_KEEPALIVE = 25;
+// WireGuard data message: 16-byte header + 16-byte auth tag, payload padded to 16 bytes
+const WG_MESSAGE_OVERHEAD = 32;
+const WG_PADDING = 16;
+const PEER_FLOW_MAX_WINDOW_SEC = 5;
 
 /** Fixed-looking WireGuard keys for DEMO_TRAFFIC only (not used on the wire). */
 const DEMO_KEY = (seed) => {
@@ -424,13 +428,12 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
 
   __getDemoPeerFlows(clients) {
     const byName = new Map(clients.map((client) => [client.name, client.id]));
-    const t = (Date.now() - this.__demoStartedAt) / 1000;
-    const wave = (period) => (Math.sin((t / period) * Math.PI * 2) + 1) / 2;
+    // kept within each demo client's own up/down rates so the totals stay consistent
     const flows = [
-      ['Laptop', 'NAS', 320000, 1500000 * wave(13)],
-      ['Office-PC', 'NAS', 450000, 60000],
-      ['Phone', 'TV', 900000 * wave(9), 25000],
-      ['Tablet', 'Laptop', 18000, 6000],
+      ['Tablet', 'Office-PC', 400000, 10000],
+      ['Laptop', 'NAS', 30000, 15000],
+      ['NAS', 'Office-PC', 100000, 3000],
+      ['TV', 'Phone', 60, 50],
     ];
     return {
       supported: true,
@@ -440,20 +443,76 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
         .map(([a, b, ab, ba]) => ({
           a: byName.get(a),
           b: byName.get(b),
-          ab: Math.round(ab),
-          ba: Math.round(ba),
+          ab,
+          ba,
+          abPackets: 0,
+          baPackets: 0,
           connections: 1,
         })),
     };
   }
 
+  /**
+   * Per-device traffic that is not device-to-device, from WireGuard counters
+   * sampled in the same window as the conntrack flows.
+   */
+  __otherTraffic(clients, peers) {
+    const now = Date.now();
+    const prev = this.__wgPrev;
+    this.__wgPrev = {
+      at: now,
+      counters: new Map(clients.map((c) => [c.id, { rx: c.transferRx || 0, tx: c.transferTx || 0 }])),
+    };
+    const dt = prev ? (now - prev.at) / 1000 : 0;
+    if (!peers.accounting || dt <= 0 || dt > PEER_FLOW_MAX_WINDOW_SEC) return null;
+
+    const peerOut = new Map();
+    const peerIn = new Map();
+    const slack = new Map();
+    const add = (map, id, bytes, packets) => {
+      const avg = packets > 0 ? bytes / packets : 0;
+      const pad = (WG_PADDING - (Math.round(avg) % WG_PADDING)) % WG_PADDING;
+      map.set(id, (map.get(id) || 0) + bytes + packets * (WG_MESSAGE_OVERHEAD + pad));
+      // padding is estimated from the average packet size, so allow one block per packet
+      slack.set(id, (slack.get(id) || 0) + packets * WG_PADDING);
+    };
+    peers.flows.forEach((f) => {
+      add(peerOut, f.a, f.ab, f.abPackets || 0);
+      add(peerIn, f.b, f.ab, f.abPackets || 0);
+      add(peerOut, f.b, f.ba, f.baPackets || 0);
+      add(peerIn, f.a, f.ba, f.baPackets || 0);
+    });
+
+    const residual = (total, peer, tolerance) => {
+      const rest = total - peer;
+      // counters are read a few ms apart and the overhead is estimated: ignore noise
+      return rest > Math.max(512, total * 0.03, tolerance) ? Math.round(rest) : 0;
+    };
+
+    const devices = {};
+    clients.forEach((client) => {
+      const before = prev.counters.get(client.id);
+      if (!before) return;
+      const up = Math.max(0, (client.transferRx || 0) - before.rx) / dt;
+      const down = Math.max(0, (client.transferTx || 0) - before.tx) / dt;
+      devices[client.id] = {
+        otherUp: residual(up, peerOut.get(client.id) || 0, slack.get(client.id) || 0),
+        otherDown: residual(down, peerIn.get(client.id) || 0, slack.get(client.id) || 0),
+      };
+    });
+    return devices;
+  }
+
   async getPeerFlows() {
     const clients = await this.getClients();
+    let peers;
     if (DEMO_TRAFFIC) {
-      return this.__getDemoPeerFlows(clients);
+      peers = this.__getDemoPeerFlows(clients);
+    } else {
+      if (!this.__peerFlows) this.__peerFlows = new PeerFlows();
+      peers = await this.__peerFlows.sample(clients);
     }
-    if (!this.__peerFlows) this.__peerFlows = new PeerFlows();
-    return this.__peerFlows.sample(clients);
+    return { ...peers, devices: this.__otherTraffic(clients, peers) };
   }
 
   async getClients() {

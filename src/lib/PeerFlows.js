@@ -7,6 +7,8 @@ const Util = require('./Util');
 
 const CONNTRACK_PATH = '/proc/net/nf_conntrack';
 const MAX_LINES = 200000;
+// a gap longer than this (e.g. modal closed) restarts the baseline instead of averaging
+const MAX_WINDOW_SEC = 5;
 
 /**
  * Parses one /proc/net/nf_conntrack line into its original and reply tuples.
@@ -29,12 +31,16 @@ function parseLine(line) {
       const key = token.slice(0, eq);
       const value = token.slice(eq + 1);
       if (key === 'src') {
-        current = { src: value, dst: null, bytes: null };
+        current = {
+          src: value, dst: null, bytes: null, packets: null,
+        };
         tuples.push(current);
       } else if (current && key === 'dst' && current.dst === null) {
         current.dst = value;
       } else if (current && key === 'bytes') {
         current.bytes = Number(value);
+      } else if (current && key === 'packets') {
+        current.packets = Number(value);
       } else if (tuples.length === 1 && key === 'sport') {
         sport = value;
       } else if (tuples.length === 1 && key === 'dport') {
@@ -51,6 +57,8 @@ function parseLine(line) {
     dst: tuples[0].dst,
     origBytes: tuples[0].bytes,
     replyBytes: tuples[1].bytes,
+    origPackets: tuples[0].packets || 0,
+    replyPackets: tuples[1].packets || 0,
     unreplied: line.includes('[UNREPLIED]'),
   };
 }
@@ -94,7 +102,8 @@ module.exports = class PeerFlows {
     }
 
     const now = Date.now();
-    const dt = this.prevAt ? (now - this.prevAt) / 1000 : 0;
+    const elapsed = this.prevAt ? (now - this.prevAt) / 1000 : 0;
+    const dt = elapsed <= MAX_WINDOW_SEC ? elapsed : 0;
     const owners = new Map();
     const ownerOf = (ip) => {
       if (!owners.has(ip)) owners.set(ip, PeerFlows.__ownerOf(ip, clients));
@@ -120,25 +129,33 @@ module.exports = class PeerFlows {
       const pairKey = `${a}|${b}`;
       if (!pairs.has(pairKey)) {
         pairs.set(pairKey, {
-          a, b, ab: 0, ba: 0, connections: 0,
+          a, b, ab: 0, ba: 0, abPackets: 0, baPackets: 0, connections: 0,
         });
       }
       const pair = pairs.get(pairKey);
       if (!entry.unreplied) pair.connections += 1;
 
       if (hasBytes) {
-        next.set(entry.key, { orig: entry.origBytes, reply: entry.replyBytes });
-        const before = this.prev.get(entry.key) || { orig: 0, reply: 0 };
+        const cur = {
+          orig: entry.origBytes,
+          reply: entry.replyBytes,
+          origPackets: entry.origPackets,
+          replyPackets: entry.replyPackets,
+        };
+        next.set(entry.key, cur);
+        const before = this.prev.get(entry.key) || {
+          orig: 0, reply: 0, origPackets: 0, replyPackets: 0,
+        };
         if (dt > 0) {
-          const fwd = Math.max(0, entry.origBytes - before.orig) / dt;
-          const rev = Math.max(0, entry.replyBytes - before.reply) / dt;
-          if (from === a) {
-            pair.ab += fwd;
-            pair.ba += rev;
-          } else {
-            pair.ab += rev;
-            pair.ba += fwd;
-          }
+          const fwd = Math.max(0, cur.orig - before.orig) / dt;
+          const rev = Math.max(0, cur.reply - before.reply) / dt;
+          const fwdPackets = Math.max(0, cur.origPackets - before.origPackets) / dt;
+          const revPackets = Math.max(0, cur.replyPackets - before.replyPackets) / dt;
+          const forward = from === a;
+          pair.ab += forward ? fwd : rev;
+          pair.ba += forward ? rev : fwd;
+          pair.abPackets += forward ? fwdPackets : revPackets;
+          pair.baPackets += forward ? revPackets : fwdPackets;
         }
       }
     }
@@ -153,6 +170,8 @@ module.exports = class PeerFlows {
         b: pair.b,
         ab: Math.round(pair.ab),
         ba: Math.round(pair.ba),
+        abPackets: Math.round(pair.abPackets),
+        baPackets: Math.round(pair.baPackets),
         connections: pair.connections,
       }));
 
