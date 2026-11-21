@@ -21,7 +21,7 @@
 * 下载或复制客户端配置。
 * 查看哪些客户端已连接的统计信息。
 * 为每个已连接客户端提供 Tx/Rx 图表。
-* 支持 Gravatar。
+* 浏览器本地生成小怪兽头像，设备改名后仍保留原图案。
 * 自动切换浅色 / 深色模式。
 * 多语言支持。
 * UI_TRAFFIC_STATS（默认关闭）。
@@ -133,7 +133,7 @@ IPv4 出站过滤默认开启。如果客户端原先通过 `WG_ALLOWED_IPS=0.0.
 | `WG_PRE_DOWN` | `...` | - | 默认值参见 [config.js](https://github.com/wg-easy/wg-easy/blob/master/src/config.js#L27)。                                             |
 | `WG_POST_DOWN` | `...` | `iptables ...` | 默认值参见 [config.js](https://github.com/wg-easy/wg-easy/blob/master/src/config.js#L28)。                                             |
 | `LANG` | `en` | `de` | Web UI 语言（支持：en、ua、ru、tr、no、pl、fr、de、ca、es、ko、vi、nl、is、pt、zh_CN、zh_TW、it、th、hi）。                                        |
-| `UI_GRAVATAR` | `false` | `true` | 从 Gravatar 加载头像，会向其发送客户端名称的哈希值。 |
+| `UI_GRAVATAR` | `false` | `true` | 设为 true 时改用 Gravatar，并向其发送客户端名称的哈希值。默认使用本地头像。 |
 | `UI_TRAFFIC_STATS` | `false` | `true` | 在 Web UI 中启用详细的 RX / TX 客户端统计。                                                                                                       |
 | `UI_CHART_TYPE` | `0` | `1` | UI_CHART_TYPE=0 # 禁用图表，UI_CHART_TYPE=1 # 折线图，UI_CHART_TYPE=2 # 面积图，UI_CHART_TYPE=3 # 柱状图。                           |
 

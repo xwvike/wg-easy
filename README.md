@@ -23,7 +23,7 @@ You have found the easiest way to install & manage WireGuard on any Linux host!
 * Download or copy a client's configuration.
 * Statistics for which clients are connected.
 * Tx/Rx charts for each connected client.
-* Gravatar support.
+* Locally generated monster avatars, stable across device renames.
 * Automatic Light / Dark Mode
 * Multilanguage Support
 * UI_TRAFFIC_STATS (default off)
@@ -135,7 +135,7 @@ These options can be configured by setting environment variables using `-e KEY="
 | `WG_PRE_DOWN` | `...` | - | See [config.js](https://github.com/wg-easy/wg-easy/blob/master/src/config.js#L27) for the default value.                                             |
 | `WG_POST_DOWN` | `...` | `iptables ...` | See [config.js](https://github.com/wg-easy/wg-easy/blob/master/src/config.js#L28) for the default value.                                             |
 | `LANG` | `en` | `de` | Web UI language (Supports: en, ua, ru, tr, no, pl, fr, de, ca, es, ko, vi, nl, is, pt, zh_CN, zh_TW, it, th, hi).                                        |
-| `UI_GRAVATAR` | `false` | `true` | Load avatars from Gravatar, sending a hash of each client name. |
+| `UI_GRAVATAR` | `false` | `true` | Use Gravatar instead of local avatars. Sends a hash of each client name to Gravatar. |
 | `UI_TRAFFIC_STATS` | `false` | `true` | Enable detailed RX / TX client stats in Web UI                                                                                                       |
 | `UI_CHART_TYPE` | `0` | `1` | UI_CHART_TYPE=0 # Charts disabled, UI_CHART_TYPE=1 # Line chart, UI_CHART_TYPE=2 # Area chart, UI_CHART_TYPE=3 # Bar chart                           |
 

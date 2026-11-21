@@ -23,6 +23,33 @@ function bytes(bytes, decimals, kib, maxunit) {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
+// Only the palette and geometry go into the image. The client ID stays in the browser.
+function localMonsterAvatar(id) {
+  const hash = md5(id);
+  const pick = (offset, choices) => choices[parseInt(hash.slice(offset, offset + 2), 16) % choices.length];
+  const hue = parseInt(hash.slice(0, 4), 16) % 360;
+  const body = `hsl(${hue}, 59%, 58%)`;
+  const ink = `hsl(${hue}, 40%, 24%)`;
+  const background = `hsl(${(hue + 24) % 360}, 55%, 92%)`;
+  const crown = pick(4, [
+    '<path d="M17 28 Q9 17 15 12 Q22 15 25 22 M40 22 Q43 14 50 12 Q53 21 46 29Z"/>',
+    '<path d="M20 25 L18 11 L29 20 M35 20 L46 10 L44 26Z"/>',
+    '<path d="M31 23 Q26 15 32 11" fill="none"/><circle cx="33" cy="10" r="4"/>',
+    '<path d="M20 26 Q15 22 15 15 M43 26 Q49 23 48 15" fill="none"/><circle cx="15" cy="14" r="3"/><circle cx="48" cy="14" r="3"/>',
+  ]);
+  const silhouette = pick(6, [
+    'M12 40 Q12 20 31 19 Q51 18 52 40 Q54 52 43 52 H22 Q11 52 12 40Z',
+    'M12 43 Q17 17 32 18 Q46 18 52 43 Q54 53 32 52 Q10 53 12 43Z',
+    'M13 32 Q13 20 25 20 H40 Q51 20 51 32 V44 Q51 52 41 52 H23 Q13 52 13 44Z',
+  ]);
+  const eyes = pick(8, [[[32, 33, 8]], [[23, 33, 6], [41, 33, 6]], [[25, 32, 7], [41, 35, 5]]]);
+  const gaze = pick(10, [-1, 0, 1]);
+  const face = eyes.map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#fff"/><circle cx="${x + gaze}" cy="${y + 1}" r="${Math.ceil(r / 2)}" fill="${ink}"/>`).join('');
+  const smile = pick(12, ['M26 44 Q32 50 38 43', 'M28 45 Q34 47 37 43', 'M28 44 Q32 48 36 44']);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${background}"/><g fill="${body}" stroke="${ink}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${crown}<path d="M21 50 L20 54 H26 L28 50 M37 50 L39 54 H45 L43 49"/><path d="${silhouette}"/></g>${face}<path d="${smile}" stroke="${ink}" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 const i18n = new VueI18n({
   locale: localStorage.getItem('lang') || 'en',
   fallbackLocale: 'en',
@@ -216,17 +243,17 @@ new Vue({
 
       const clients = await this.api.getClients();
       this.clients = clients.map((client) => {
-        client.avatar = this.uiGravatar
-          ? `https://www.gravatar.com/avatar/${md5(client.name.trim().toLowerCase())}?d=monsterid`
-          : null;
-
         if (!this.clientsPersist[client.id]) {
-          this.clientsPersist[client.id] = {};
+          this.clientsPersist[client.id] = { avatar: localMonsterAvatar(client.id) };
           this.clientsPersist[client.id].transferRxHistory = Array(50).fill(0);
           this.clientsPersist[client.id].transferRxPrevious = client.transferRx;
           this.clientsPersist[client.id].transferTxHistory = Array(50).fill(0);
           this.clientsPersist[client.id].transferTxPrevious = client.transferTx;
         }
+
+        client.avatar = this.uiGravatar
+          ? `https://www.gravatar.com/avatar/${md5(client.name.trim().toLowerCase())}?d=monsterid`
+          : this.clientsPersist[client.id].avatar;
 
         // Debug
         // client.transferRx = this.clientsPersist[client.id].transferRxPrevious + Math.random() * 1000;
