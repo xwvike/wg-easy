@@ -49,6 +49,13 @@ class API {
     });
   }
 
+  async getUiGravatar() {
+    return this.call({
+      method: 'get',
+      path: '/ui-gravatar',
+    });
+  }
+
   async getuiTrafficStats() {
     return this.call({
       method: 'get',

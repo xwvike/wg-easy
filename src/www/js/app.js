@@ -70,6 +70,7 @@ new Vue({
 
     currentRelease: null,
     latestRelease: null,
+    uiGravatar: false,
 
     uiTrafficStats: false,
     trafficModalOpen: false,
@@ -215,7 +216,9 @@ new Vue({
 
       const clients = await this.api.getClients();
       this.clients = clients.map((client) => {
-        client.avatar = `https://www.gravatar.com/avatar/${md5(client.name.trim().toLowerCase())}?d=monsterid`;
+        client.avatar = this.uiGravatar
+          ? `https://www.gravatar.com/avatar/${md5(client.name.trim().toLowerCase())}?d=monsterid`
+          : null;
 
         if (!this.clientsPersist[client.id]) {
           this.clientsPersist[client.id] = {};
@@ -480,6 +483,14 @@ new Vue({
         this.uiTrafficStats = false;
       });
 
+    this.api.getUiGravatar()
+      .then((res) => {
+        this.uiGravatar = res === true;
+      })
+      .catch(() => {
+        this.uiGravatar = false;
+      });
+
     this.api.getChartType()
       .then((res) => {
         this.uiChartType = parseInt(res, 10);
@@ -495,25 +506,8 @@ new Vue({
         i18n.locale = lang;
       }
 
-      const currentRelease = await this.api.getRelease();
-      const latestRelease = await fetch('https://wg-easy.github.io/wg-easy/changelog.json')
-        .then((res) => res.json())
-        .then((releases) => {
-          const releasesArray = Object.entries(releases).map(([version, changelog]) => ({
-            version: parseInt(version, 10),
-            changelog,
-          }));
-          releasesArray.sort((a, b) => {
-            return b.version - a.version;
-          });
-
-          return releasesArray[0];
-        });
-
-      if (currentRelease >= latestRelease.version) return;
-
-      this.currentRelease = currentRelease;
-      this.latestRelease = latestRelease;
+      // No upstream update check: it contacted a third party on every page load
+      // and upstream releases do not apply to this fork.
     }).catch((err) => console.error(err));
   },
   computed: {

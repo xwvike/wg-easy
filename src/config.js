@@ -4,6 +4,9 @@ const { release: { version } } = require('./package.json');
 
 module.exports.RELEASE = version;
 module.exports.PORT = process.env.PORT || '51821';
+if (!/^\d{1,5}$/.test(module.exports.PORT)) {
+  throw new Error(`Invalid PORT: ${module.exports.PORT}`);
+}
 module.exports.WEBUI_HOST = process.env.WEBUI_HOST || '0.0.0.0';
 /** This is only kept for migration purpose. DO NOT USE! */
 module.exports.PASSWORD = process.env.PASSWORD;
@@ -30,14 +33,32 @@ module.exports.SESSION_MAX_AGE = positiveInt(process.env.SESSION_MAX_AGE, 12 * 6
  * Default 'auto' so plain-HTTP LAN installs still work.
  */
 module.exports.SECURE_COOKIE = process.env.SECURE_COOKIE || 'auto';
-/** Trust X-Forwarded-* when behind a reverse proxy (also used for client IP). */
-module.exports.TRUST_PROXY = process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1';
-/** Failed login / Authorization attempts before lockout. */
+/** Removed: replaced by TRUSTED_PROXIES + REAL_IP_HEADER. Kept only to fail loudly. */
+module.exports.TRUST_PROXY = process.env.TRUST_PROXY;
+/**
+ * Comma-separated IPs/CIDRs of reverse proxies whose forwarding headers are
+ * believed (e.g. the Docker gateway in front of cloudflared). Empty = none.
+ */
+module.exports.TRUSTED_PROXIES = process.env.TRUSTED_PROXIES || '';
+/** Header carrying the real client IP from a trusted proxy (e.g. cf-connecting-ip). */
+module.exports.REAL_IP_HEADER = (process.env.REAL_IP_HEADER || 'x-forwarded-for').toLowerCase();
+/** Failed login / Authorization attempts per client IP (IPv6: per /64) before lockout. */
 module.exports.LOGIN_MAX_ATTEMPTS = positiveInt(process.env.LOGIN_MAX_ATTEMPTS, 5);
+/** Failed attempts across all clients per window before new logins pause. */
+module.exports.LOGIN_GLOBAL_MAX_ATTEMPTS = positiveInt(process.env.LOGIN_GLOBAL_MAX_ATTEMPTS, 100);
 /** Sliding window for counting failures (ms). */
 module.exports.LOGIN_WINDOW_MS = positiveInt(process.env.LOGIN_WINDOW_MS, 15 * 60 * 1000);
 /** Lockout duration after too many failures (ms). */
 module.exports.LOGIN_LOCKOUT_MS = positiveInt(process.env.LOGIN_LOCKOUT_MS, 15 * 60 * 1000);
+/** Dev only: allow the publicly known example password hash. */
+module.exports.INSECURE_ALLOW_DEFAULT_PASSWORD = process.env.INSECURE_ALLOW_DEFAULT_PASSWORD === 'true';
+/** Whether VPN peers may reach the Web UI through wg0 (set false behind a proxy/tunnel). */
+module.exports.WEBUI_VPN_ACCESS = process.env.WEBUI_VPN_ACCESS !== 'false';
+/**
+ * Only forward peer traffic leaving the VPN to WG_ALLOWED_IPS; private ranges
+ * and cloud metadata stay blocked unless listed explicitly.
+ */
+module.exports.WG_EGRESS_FILTER = process.env.WG_EGRESS_FILTER !== 'false';
 module.exports.WG_PATH = process.env.WG_PATH || '/etc/wireguard/';
 module.exports.WG_DEVICE = process.env.WG_DEVICE || 'eth0';
 module.exports.WG_HOST = process.env.WG_HOST;
@@ -69,5 +90,7 @@ iptables -D FORWARD -o wg0 -j ACCEPT;
 module.exports.LANG = process.env.LANG || 'en';
 module.exports.UI_TRAFFIC_STATS = process.env.UI_TRAFFIC_STATS || 'false';
 module.exports.UI_CHART_TYPE = process.env.UI_CHART_TYPE || 0;
+/** Load avatars from gravatar.com (sends a hash of each client name to a third party). */
+module.exports.UI_GRAVATAR = process.env.UI_GRAVATAR === 'true';
 /** When true, skip real WireGuard and serve live mock traffic for UI preview. */
 module.exports.DEMO_TRAFFIC = process.env.DEMO_TRAFFIC === 'true' || process.env.DEMO_TRAFFIC === '1';

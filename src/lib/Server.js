@@ -17,7 +17,6 @@ const {
   fromNodeMiddleware,
   getRouterParam,
   toNodeListener,
-  readBody,
   send,
   setHeader,
   setResponseHeader,
@@ -27,6 +26,7 @@ const {
 const WireGuard = require('../services/WireGuard');
 const Util = require('./Util');
 const AuthLimiter = require('./AuthLimiter');
+const Http = require('./Http');
 
 const {
   PORT,
@@ -38,13 +38,25 @@ const {
   SESSION_MAX_AGE,
   SECURE_COOKIE,
   TRUST_PROXY,
+  TRUSTED_PROXIES,
+  REAL_IP_HEADER,
   LOGIN_MAX_ATTEMPTS,
+  LOGIN_GLOBAL_MAX_ATTEMPTS,
   LOGIN_WINDOW_MS,
   LOGIN_LOCKOUT_MS,
+  INSECURE_ALLOW_DEFAULT_PASSWORD,
+  WEBUI_VPN_ACCESS,
+  WG_DEFAULT_ADDRESS,
   LANG,
   UI_TRAFFIC_STATS,
   UI_CHART_TYPE,
+  UI_GRAVATAR,
 } = require('../config');
+
+/** Restoring a backup carries every client's keys; still far below this. */
+const RESTORE_BODY_LIMIT = 1024 * 1024;
+/** Passwords published in this repository's docs and examples. */
+const PUBLIC_PASSWORDS = ['foobar123'];
 
 if (PASSWORD) {
   throw new Error('DO NOT USE PASSWORD ENVIRONMENT VARIABLE. USE PASSWORD_HASH INSTEAD.\nSee https://github.com/wg-easy/wg-easy/blob/v14/How_to_generate_an_bcrypt_hash.md');
@@ -54,31 +66,40 @@ if (!PASSWORD_HASH) {
   throw new Error('PASSWORD_HASH environment variable is required. The Web UI must not run without authentication.\nSee https://github.com/wg-easy/wg-easy/blob/v14/How_to_generate_an_bcrypt_hash.md');
 }
 
+if (TRUST_PROXY === 'true' || TRUST_PROXY === '1') {
+  throw new Error('TRUST_PROXY has been removed because it let clients spoof their IP. Set TRUSTED_PROXIES to the proxy addresses (e.g. the exact IP of your reverse proxy) and REAL_IP_HEADER (e.g. cf-connecting-ip) instead.');
+}
+
+if (!/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(PASSWORD_HASH)) {
+  throw new Error('PASSWORD_HASH is not a valid bcrypt hash. Remember to double every $ in docker-compose.yml.');
+}
+
+if (Number(PASSWORD_HASH.slice(4, 6)) < 10) {
+  // eslint-disable-next-line no-console
+  console.warn('PASSWORD_HASH uses a bcrypt cost below 10; generate a new hash with a higher cost.');
+}
+
+if (!INSECURE_ALLOW_DEFAULT_PASSWORD && PUBLIC_PASSWORDS.some((pw) => bcrypt.compareSync(pw, PASSWORD_HASH))) {
+  throw new Error('PASSWORD_HASH is the publicly known example password. Generate your own hash; see How_to_generate_an_bcrypt_hash.md');
+}
+
 const sessionSecret = SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 if (!SESSION_SECRET) {
   // eslint-disable-next-line no-console
-  console.warn('SESSION_SECRET is not set; sessions will reset whenever the process restarts. Set SESSION_SECRET for stable sessions.');
+  console.warn('SESSION_SECRET is unset. Using a random cookie signing key for this process.');
 }
 
 const authLimiter = new AuthLimiter({
   maxAttempts: LOGIN_MAX_ATTEMPTS,
+  globalMaxAttempts: LOGIN_GLOBAL_MAX_ATTEMPTS,
   windowMs: LOGIN_WINDOW_MS,
   lockoutMs: LOGIN_LOCKOUT_MS,
 });
 
-/**
- * @param {import('node:http').IncomingMessage} req
- * @returns {string}
- */
-const clientIp = (req) => {
-  if (TRUST_PROXY) {
-    const xff = req.headers['x-forwarded-for'];
-    if (typeof xff === 'string' && xff.length > 0) {
-      return xff.split(',')[0].trim() || 'unknown';
-    }
-  }
-  return (req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
-};
+const http = new Http({
+  trustedProxies: TRUSTED_PROXIES,
+  realIpHeader: REAL_IP_HEADER,
+});
 
 /**
  * @param {string} password
@@ -105,6 +126,51 @@ const throwRateLimited = (event, retryAfterSec) => {
     status: 429,
     message: 'Too Many Attempts',
   });
+};
+
+/**
+ * Checks a password under the brute-force limiter; throws 401/429 on failure.
+ *
+ * @param {import('h3').H3Event} event
+ * @param {unknown} password
+ */
+const authenticate = async (event, password) => {
+  const attempt = authLimiter.begin(http.clientIp(event.node.req));
+  if (!attempt.ok) {
+    throwRateLimited(event, attempt.retryAfterSec);
+  }
+
+  const pending = authLimiter.withSlot(() => isPasswordValid(password));
+  if (!pending) {
+    authLimiter.cancel(attempt);
+    throwRateLimited(event, 1);
+  }
+
+  if (await pending) {
+    authLimiter.succeed(attempt);
+    return;
+  }
+
+  const result = authLimiter.fail(attempt);
+  if (result.locked) {
+    throwRateLimited(event, result.retryAfterSec);
+  }
+  throw createError({ status: 401, message: 'Incorrect Password' });
+};
+
+/**
+ * Whether a request arrived from a VPN peer (its own address or a subnet it routes).
+ *
+ * @param {import('node:http').IncomingMessage} req
+ */
+const isFromVpn = async (req) => {
+  const ip = Http.socketIp(req);
+  if (!Util.isValidIPv4(ip)) return false;
+  const self = { address: ip, cidr: 32 };
+  if (Util.cidrOverlaps(self, { address: WG_DEFAULT_ADDRESS.replace('x', '0'), cidr: 24 })) return true;
+  const config = await WireGuard.getConfig();
+  return Object.values(config.clients)
+    .some((client) => (client.allowedIPs ?? []).some((allowed) => Util.cidrOverlaps(allowed, self)));
 };
 
 /**
@@ -143,12 +209,28 @@ module.exports = class Server {
     });
     this.app = app;
 
+    app.use(defineEventHandler(async (event) => {
+      const { req, res } = event.node;
+      // express-session reads req.secure for `secure: 'auto'` when `proxy` is unset
+      req.secure = http.isSecure(req);
+      Http.setSecurityHeaders(res, {
+        secure: req.secure,
+        api: req.url.startsWith('/api/'),
+        gravatar: UI_GRAVATAR,
+      });
+
+      if (!WEBUI_VPN_ACCESS && await isFromVpn(req)) {
+        throw createError({ status: 403, message: 'Web UI is not reachable over the VPN' });
+      }
+
+      http.assertSameOrigin(req);
+    }));
+
     app.use(fromNodeMiddleware(expressSession({
       name: 'wg-easy.sid',
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
-      proxy: TRUST_PROXY,
       cookie: {
         httpOnly: true,
         sameSite: 'strict',
@@ -161,11 +243,6 @@ module.exports = class Server {
     app.use(router);
 
     router
-      .get('/api/release', defineEventHandler((event) => {
-        setHeader(event, 'Content-Type', 'application/json');
-        return RELEASE;
-      }))
-
       .get('/api/lang', defineEventHandler((event) => {
         setHeader(event, 'Content-Type', 'application/json');
         return `"${LANG}"`;
@@ -181,6 +258,10 @@ module.exports = class Server {
         return `"${UI_CHART_TYPE}"`;
       }))
 
+      .get('/api/ui-gravatar', defineEventHandler(() => {
+        return UI_GRAVATAR;
+      }))
+
       // Authentication
       .get('/api/session', defineEventHandler((event) => {
         const authenticated = !!(event.node.req.session && event.node.req.session.authenticated);
@@ -191,30 +272,11 @@ module.exports = class Server {
         };
       }))
       .post('/api/session', defineEventHandler(async (event) => {
-        const ip = clientIp(event.node.req);
-        const limited = authLimiter.check(ip);
-        if (!limited.ok) {
-          throwRateLimited(event, limited.retryAfterSec);
-        }
-
-        const body = await readBody(event).catch(() => ({}));
-        const password = body?.password;
-
-        if (!(await isPasswordValid(password))) {
-          const result = authLimiter.fail(ip);
-          if (result.locked) {
-            throwRateLimited(event, result.retryAfterSec);
-          }
-          throw createError({
-            status: 401,
-            message: 'Incorrect Password',
-          });
-        }
-
-        authLimiter.succeed(ip);
+        const { password } = await Http.readJsonBody(event);
+        await authenticate(event, password);
         await regenerateSession(event.node.req);
 
-        debug(`New Session: ${event.node.req.session.id}`);
+        debug('New session created.');
 
         return { success: true };
       }));
@@ -232,22 +294,8 @@ module.exports = class Server {
         }
 
         if (req.headers['authorization']) {
-          const ip = clientIp(req);
-          const limited = authLimiter.check(ip);
-          if (!limited.ok) {
-            throwRateLimited(event, limited.retryAfterSec);
-          }
-
-          if (await isPasswordValid(req.headers['authorization'])) {
-            authLimiter.succeed(ip);
-            return;
-          }
-
-          const result = authLimiter.fail(ip);
-          if (result.locked) {
-            throwRateLimited(event, result.retryAfterSec);
-          }
-          throw createError({ status: 401, message: 'Incorrect Password' });
+          await authenticate(event, req.headers['authorization']);
+          return;
         }
 
         throw createError({ status: 401, message: 'Not Logged In' });
@@ -258,9 +306,11 @@ module.exports = class Server {
     app.use(router2);
 
     router2
+      .get('/api/release', defineEventHandler((event) => {
+        setHeader(event, 'Content-Type', 'application/json');
+        return RELEASE;
+      }))
       .delete('/api/session', defineEventHandler(async (event) => {
-        const sessionId = event.node.req.session.id;
-
         await new Promise((resolve, reject) => {
           event.node.req.session.destroy((err) => {
             if (err) return reject(err);
@@ -268,11 +318,11 @@ module.exports = class Server {
           });
         });
 
-        debug(`Deleted Session: ${sessionId}`);
+        debug('Session deleted.');
         return { success: true };
       }))
       .get('/api/wireguard/client', defineEventHandler(async (event) => {
-        const remote = (event.node.req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+        const remote = http.clientIp(event.node.req);
         const clients = await WireGuard.getClients();
         return clients.map((client) => ({
           ...client,
@@ -303,13 +353,13 @@ module.exports = class Server {
         return config;
       }))
       .post('/api/wireguard/client', defineEventHandler(async (event) => {
-        const { name, fenced } = await readBody(event);
+        const { name, fenced } = await Http.readJsonBody(event);
         await WireGuard.createClient({ name, fenced });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/fenced', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        const { fenced } = await readBody(event);
+        const { fenced } = await Http.readJsonBody(event);
         await WireGuard.updateClientFenced({ clientId, fenced });
         return { success: true };
       }))
@@ -330,19 +380,19 @@ module.exports = class Server {
       }))
       .put('/api/wireguard/client/:clientId/name', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        const { name } = await readBody(event);
+        const { name } = await Http.readJsonBody(event);
         await WireGuard.updateClientName({ clientId, name });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/address', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        const { address } = await readBody(event);
+        const { address } = await Http.readJsonBody(event);
         await WireGuard.updateClientAddress({ clientId, address });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/allowedips', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        const { allowedIPs } = await readBody(event);
+        const { allowedIPs } = await Http.readJsonBody(event);
         await WireGuard.updateClientAllowedIPs({ clientId, allowedIPs });
         return { success: true };
       }));
@@ -382,7 +432,7 @@ module.exports = class Server {
         return config;
       }))
       .put('/api/wireguard/restore', defineEventHandler(async (event) => {
-        const { file } = await readBody(event);
+        const { file } = await Http.readJsonBody(event, { limit: RESTORE_BODY_LIMIT });
         await WireGuard.restoreConfiguration(file);
         return { success: true };
       }));
@@ -419,7 +469,13 @@ module.exports = class Server {
       }),
     );
 
-    createServer(toNodeListener(app)).listen(PORT, WEBUI_HOST);
+    const server = createServer({
+      headersTimeout: 10 * 1000,
+      requestTimeout: 30 * 1000,
+      maxHeaderSize: 16 * 1024,
+    }, toNodeListener(app));
+    server.keepAliveTimeout = 5 * 1000;
+    server.listen(PORT, WEBUI_HOST);
     debug(`Listening on http://${WEBUI_HOST}:${PORT}`);
   }
 
