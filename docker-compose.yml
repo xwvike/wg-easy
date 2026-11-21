@@ -10,13 +10,17 @@ services:
       # ⚠️ Required:
       # Change this to your host's public address
       - WG_HOST=raspberrypi.local
-      # ⚠️ Required: Web UI will not start without PASSWORD_HASH
-      # (needs double $$, hash of 'foobar123'; see "How_to_generate_an_bcrypt_hash.md")
-      - PASSWORD_HASH=$$2y$$10$$hBCoykrB95WSzuV4fafBzOHWKu9sbyVa34GJr8VV5R/pIelfEMYyG
-      # Optional: keep sessions across restarts
+      # ⚠️ Required: Web UI will not start without PASSWORD_HASH.
+      # Generate your own (see "How_to_generate_an_bcrypt_hash.md") and double every $ here.
+      - PASSWORD_HASH=
+      # Optional: use a stable key for signing session cookies
       # - SESSION_SECRET=change-me-to-a-long-random-string
-      # - SECURE_COOKIE=auto # true | false | auto
-      # - TRUST_PROXY=true # only behind a trusted reverse proxy
+      - SECURE_COOKIE=true
+      - WEBUI_VPN_ACCESS=false
+      # Behind a reverse proxy / Cloudflare Tunnel publishing 127.0.0.1:51821:
+      # - TRUSTED_PROXIES=172.18.0.1 # replace with the actual address of your trusted proxy
+      # - REAL_IP_HEADER=cf-connecting-ip # or x-forwarded-for for other proxies
+      # - WG_EGRESS_FILTER=true # IPv4 egress policy; see the README for private networks and DNS
 
       # Optional:
       # - PORT=51821
@@ -40,12 +44,16 @@ services:
       - etc_wireguard:/etc/wireguard
     ports:
       - "51820:51820/udp"
-      - "51821:51821/tcp"
+      - "127.0.0.1:51821:51821/tcp"
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
+      # - SYS_MODULE # only if the host has not loaded the wireguard module
       # - NET_RAW # ⚠️ Uncomment if using Podman 
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 256
     sysctls:
       - net.ipv4.ip_forward=1
       - net.ipv4.conf.all.src_valid_mark=0

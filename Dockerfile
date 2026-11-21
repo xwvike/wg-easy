@@ -9,7 +9,7 @@ RUN npm ci --omit=dev &&\
 # Copy build result to a new image.
 # This saves a lot of disk space.
 FROM docker.io/library/node:22-bookworm-slim
-HEALTHCHECK CMD /usr/bin/timeout 5s /bin/sh -c "/usr/bin/wg show | /bin/grep -q interface || exit 1" --interval=1m --timeout=5s --retries=3
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 CMD ip -o link show up dev wg0 | grep -q 'wg0:'
 COPY --from=build_node_modules /app /app
 
 # Move node_modules one directory up, so during development
@@ -33,9 +33,6 @@ RUN apt-get update && \
     iptables \
     wireguard-tools && \
     rm -rf /var/lib/apt/lists/*
-
-# Set Environment
-ENV DEBUG=Server,WireGuard
 
 # Run Web UI
 WORKDIR /app

@@ -67,9 +67,8 @@ To automatically install & run wg-easy, simply run:
   -e WG_PORT=51820 \
   -v ~/.wg-easy:/etc/wireguard \
   -p 51820:51820/udp \
-  -p 51821:51821/tcp \
+  -p 127.0.0.1:51821:51821/tcp \
   --cap-add=NET_ADMIN \
-  --cap-add=SYS_MODULE \
   --sysctl="net.ipv4.conf.all.src_valid_mark=0" \
   --sysctl="net.ipv4.ip_forward=1" \
   --restart unless-stopped \
@@ -80,13 +79,23 @@ To automatically install & run wg-easy, simply run:
 >
 > 💡 `PASSWORD_HASH` is **required** — the container will not start without it. Replace `YOUR_ADMIN_PASSWORD_HASH` with a bcrypt hash. See [How_to_generate_an_bcrypt_hash.md](./How_to_generate_an_bcrypt_hash.md).
 
-The Web UI will now be available on `http://0.0.0.0:51821`.
+The host-local Web UI will now be available on `http://127.0.0.1:51821`.
 
 > 💡 Your configuration files will be saved in `~/.wg-easy`
 
 WireGuard Easy can be launched with Docker Compose as well - just download
 [`docker-compose.yml`](docker-compose.yml), make necessary adjustments and
 execute `docker compose up --detach`.
+
+For local development, `npm run serve` uses a Compose override with the public example password. The published Web UI address is `http://127.0.0.1:51821` and direct Web UI access over the VPN is disabled.
+
+The production Compose template requires HTTPS for session cookies. Configure the TLS proxy and its trusted source address before logging in. For local development over HTTP, use the development override.
+
+#### Upgrading an existing deployment
+
+If you use `TRUST_PROXY=true` or `1`, remove it before restarting. Set `TRUSTED_PROXIES` to the actual socket address of your reverse proxy as seen by the container. Configure the proxy to overwrite incoming forwarding headers. With Cloudflare Tunnel, set `REAL_IP_HEADER=cf-connecting-ip` when your trusted proxy supplies that header. For a proxy running on the host, publish the UI as `127.0.0.1:51821:51821/tcp`. Set `WEBUI_VPN_ACCESS=false` if peers should also go through the proxy.
+
+IPv4 egress filtering is enabled by default. If peers previously reached a LAN through the server with `WG_ALLOWED_IPS=0.0.0.0/0, ::/0`, append that LAN explicitly, for example `0.0.0.0/0, ::/0, 192.168.15.0/24`. Private DNS servers listed in `WG_DEFAULT_DNS` also receive TCP and UDP traffic on port 53. The filter blocks new outbound connections to `169.254.0.0/16` and `100.100.100.200/32` even if listed. Set `WG_EGRESS_FILTER=false` to retain the previous forwarding behavior.
 
 ### 3. Sponsor
 
@@ -101,10 +110,13 @@ These options can be configured by setting environment variables using `-e KEY="
 | `PORT` | `51821` | `6789` | TCP port for Web UI.                                                                                                                                 |
 | `WEBUI_HOST` | `0.0.0.0` | `localhost` | IP address web UI binds to.                                                                                                                          |
 | `PASSWORD_HASH` | - | `$2y$05$Ci...` | **Required.** bcrypt password hash for Web UI / API login. The process refuses to start without it. See [How_to_generate_an_bcrypt_hash.md](./How_to_generate_an_bcrypt_hash.md). |
-| `SESSION_SECRET` | random | `long-random-string` | Signs the session cookie. Set this so sessions survive restarts. |
+| `SESSION_SECRET` | random | `long-random-string` | Signs session cookies. Sessions are stored in memory and expire on restart. |
 | `SESSION_MAX_AGE` | `43200000` | `86400000` | Session lifetime in milliseconds (default 12h). |
 | `SECURE_COOKIE` | `auto` | `true` | Cookie `Secure` flag: `true`, `false`, or `auto` (set when the request is HTTPS). |
-| `TRUST_PROXY` | `false` | `true` | Trust `X-Forwarded-*` (client IP + HTTPS detection). Enable only behind a trusted reverse proxy. |
+| `TRUSTED_PROXIES` | empty | `172.18.0.2` | Comma-separated proxy IPs or CIDRs allowed to supply forwarding headers. |
+| `REAL_IP_HEADER` | `x-forwarded-for` | `cf-connecting-ip` | Client address header supplied by a trusted proxy. |
+| `WEBUI_VPN_ACCESS` | `true` | `false` | Allow VPN peers to access the Web UI and API directly. |
+| `LOGIN_GLOBAL_MAX_ATTEMPTS` | `100` | `50` | Shared login budget per window. When full, only previously successful client addresses can try again. |
 | `LOGIN_MAX_ATTEMPTS` | `5` | `10` | Failed login / `Authorization` attempts before temporary lockout. |
 | `LOGIN_WINDOW_MS` | `900000` | `600000` | Sliding window for counting failures (ms). |
 | `LOGIN_LOCKOUT_MS` | `900000` | `1800000` | Lockout duration after too many failures (ms). |
@@ -117,11 +129,13 @@ These options can be configured by setting environment variables using `-e KEY="
 | `WG_DEFAULT_ADDRESS` | `10.8.0.x` | `10.6.0.x` | Clients IP address range.                                                                                                                            |
 | `WG_DEFAULT_DNS` | `1.1.1.1` | `8.8.8.8, 8.8.4.4` | DNS server clients will use. If set to blank value, clients will not use any DNS.                                                                    |
 | `WG_ALLOWED_IPS` | `0.0.0.0/0, ::/0` | `192.168.15.0/24, 10.0.1.0/24` | Allowed IPs clients will use.                                                                                                                        |
+| `WG_EGRESS_FILTER` | `true` | `false` | Filter IPv4 traffic forwarded from peers to destinations outside the VPN using `WG_ALLOWED_IPS`. |
 | `WG_PRE_UP` | `...` | - | See [config.js](https://github.com/wg-easy/wg-easy/blob/master/src/config.js#L19) for the default value.                                             |
 | `WG_POST_UP` | `...` | `iptables ...` | See [config.js](https://github.com/wg-easy/wg-easy/blob/master/src/config.js#L20) for the default value.                                             |
 | `WG_PRE_DOWN` | `...` | - | See [config.js](https://github.com/wg-easy/wg-easy/blob/master/src/config.js#L27) for the default value.                                             |
 | `WG_POST_DOWN` | `...` | `iptables ...` | See [config.js](https://github.com/wg-easy/wg-easy/blob/master/src/config.js#L28) for the default value.                                             |
 | `LANG` | `en` | `de` | Web UI language (Supports: en, ua, ru, tr, no, pl, fr, de, ca, es, ko, vi, nl, is, pt, zh_CN, zh_TW, it, th, hi).                                        |
+| `UI_GRAVATAR` | `false` | `true` | Load avatars from Gravatar, sending a hash of each client name. |
 | `UI_TRAFFIC_STATS` | `false` | `true` | Enable detailed RX / TX client stats in Web UI                                                                                                       |
 | `UI_CHART_TYPE` | `0` | `1` | UI_CHART_TYPE=0 # Charts disabled, UI_CHART_TYPE=1 # Line chart, UI_CHART_TYPE=2 # Area chart, UI_CHART_TYPE=3 # Bar chart                           |
 

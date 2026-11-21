@@ -5,14 +5,10 @@ services:
     volumes:
       - ./src/:/app/
       # - ./data/:/etc/wireguard
-    ports:
-      - "51820:51820/udp"
-      - "51821:51821/tcp"
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
     environment:
       # Required (hash of 'foobar123')
       - PASSWORD_HASH=$$2y$$10$$hBCoykrB95WSzuV4fafBzOHWKu9sbyVa34GJr8VV5R/pIelfEMYyG
+      - INSECURE_ALLOW_DEFAULT_PASSWORD=true
+      - SECURE_COOKIE=false
       - SESSION_SECRET=dev-only-change-me
       - WG_HOST=192.168.100.3
