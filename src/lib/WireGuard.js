@@ -25,9 +25,48 @@ const {
   WG_PRE_DOWN,
   WG_POST_DOWN,
   DEMO_TRAFFIC,
+  PORT,
+  WEBUI_VPN_ACCESS,
+  WG_EGRESS_FILTER,
 } = require('../config');
 
 const FENCED_KEEPALIVE = 25;
+const MAX_NAME_LENGTH = 64;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Never forwarded to, even if WG_ALLOWED_IPS covers them: cloud instance metadata. */
+const ALWAYS_BLOCKED = ['169.254.0.0/16', '100.100.100.200/32'];
+/** Non-public IPv4 space; only forwarded to when WG_ALLOWED_IPS names it explicitly. */
+const NON_PUBLIC = [
+  '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '172.16.0.0/12',
+  '192.0.0.0/24', '192.168.0.0/16', '198.18.0.0/15', '224.0.0.0/4', '240.0.0.0/4',
+];
+
+/**
+ * IPv4 CIDRs from a comma-separated env value, normalized to network address.
+ *
+ * @param {string} list
+ * @returns {{ address: string, cidr: number }[]}
+ */
+const parseIPv4List = (list) => String(list || '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .map((entry) => {
+    const [address, prefix = '32'] = entry.split('/');
+    const cidr = Number(prefix);
+    if (!Util.isValidIPv4(address) || !/^\d{1,2}$/.test(prefix) || cidr > 32) return null;
+    return { address: Util.networkAddress(address, cidr), cidr };
+  })
+  .filter(Boolean);
+
+const toCidr = ({ address, cidr }) => `${address}/${cidr}`;
+const fromCidr = (value) => {
+  const [address, cidr] = value.split('/');
+  return { address, cidr: Number(cidr) };
+};
+/** a lies entirely inside b */
+const within = (a, b) => a.cidr >= b.cidr && Util.cidrOverlaps(a, b);
 // WireGuard data message: 16-byte header + 16-byte auth tag, payload padded to 16 bytes
 const WG_MESSAGE_OVERHEAD = 32;
 const WG_PADDING = 16;
@@ -152,42 +191,44 @@ module.exports = class WireGuard {
   }
 
   async __buildConfig() {
-    this.__configPromise = Promise.resolve().then(async () => {
-      if (!WG_HOST) {
-        throw new Error('WG_HOST Environment Variable Not Set!');
-      }
+    if (!WG_HOST) {
+      throw new Error('WG_HOST Environment Variable Not Set!');
+    }
 
-      debug('Loading configuration...');
-      let config;
-      try {
-        config = await fs.readFile(path.join(WG_PATH, 'wg0.json'), 'utf8');
-        config = JSON.parse(config);
-        debug('Configuration loaded.');
-      } catch (err) {
-        const privateKey = await Util.exec('wg genkey');
-        const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`, {
-          log: 'echo ***hidden*** | wg pubkey',
-        });
-        const address = WG_DEFAULT_ADDRESS.replace('x', '1');
+    debug('Loading configuration...');
+    let raw;
+    try {
+      raw = await fs.readFile(path.join(WG_PATH, 'wg0.json'), 'utf8');
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      const privateKey = await Util.exec('wg genkey');
+      const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`, {
+        log: 'echo ***hidden*** | wg pubkey',
+      });
+      debug('Configuration generated.');
+      const initial = {
+        server: { privateKey, publicKey, address: WG_DEFAULT_ADDRESS.replace('x', '1') },
+        clients: {},
+      };
+      await this.__persistConfig(initial);
+      return initial;
+    }
 
-        config = {
-          server: {
-            privateKey,
-            publicKey,
-            address,
-          },
-          clients: {},
-        };
-        debug('Configuration generated.');
-      }
-
-      return config;
-    });
-
-    return this.__configPromise;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // Node's JSON parser may include private key material in its error message.
+      throw new Error('Invalid JSON in wg0.json. Repair the file or restore a valid backup.');
+    }
   }
 
   async getConfig() {
+    await this.__queue;
+    return this.__getReadyConfig();
+  }
+
+  async __getReadyConfig() {
+    if (this.__configError) throw this.__configError;
     if (DEMO_TRAFFIC) {
       if (!this.__configPromise) {
         this.__demoStartedAt = Date.now();
@@ -199,22 +240,28 @@ module.exports = class WireGuard {
     }
 
     if (!this.__configPromise) {
-      const config = await this.__buildConfig();
-
-      await this.__saveConfig(config);
-      await Util.exec('wg-quick down wg0').catch(() => { });
-      await this.__syncFirewall(config);
-      await Util.exec('wg-quick up wg0').catch((err) => {
-        if (err && err.message && err.message.includes('Cannot find device "wg0"')) {
-          throw new Error('WireGuard exited with the error: Cannot find device "wg0"\nThis usually means that your host\'s kernel does not support WireGuard!');
-        }
-
-        throw err;
-      });
-      await this.__syncConfig();
+      this.__configPromise = this.__initialize();
     }
-
     return this.__configPromise;
+  }
+
+  async __initialize() {
+    const config = await this.__buildConfig();
+
+    await this.__writeInterfaceConfig(config);
+    await Util.exec('wg-quick down wg0').catch(() => { });
+    await this.__syncFirewall(config);
+    await Util.exec('wg-quick up wg0').catch((err) => {
+      if (err && err.message && err.message.includes('Cannot find device "wg0"')) {
+        throw new Error('WireGuard exited with the error: Cannot find device "wg0"\nThis usually means that your host\'s kernel does not support WireGuard!');
+      }
+
+      throw err;
+    });
+    // PostUp may have inserted rules above ours; re-pin before peers can talk
+    await this.__syncFirewall(config);
+    await this.__syncConfig();
+    return config;
   }
 
   __serialize(task) {
@@ -224,15 +271,47 @@ module.exports = class WireGuard {
   }
 
   async saveConfig() {
+    return this.__mutate(() => {});
+  }
+
+  /**
+   * Applies `fn` to the config, persists it and pushes it to WireGuard and
+   * iptables. If applying fails, the previous state is restored and re-applied,
+   * so the stored config never claims protections (e.g. fencing) that are not
+   * actually in force.
+   *
+   * @template T
+   * @param {(config: object) => T | Promise<T>} fn
+   * @returns {Promise<T>}
+   */
+  async __mutate(fn) {
     return this.__serialize(async () => {
-      const config = await this.getConfig();
-      await this.__saveConfig(config);
-      await this.__applyConfig(config);
+      const previous = await this.__getReadyConfig();
+      const candidate = structuredClone(previous);
+      const result = await fn(candidate);
+      try {
+        await this.__applyConfig(candidate);
+        await this.__persistConfig(candidate);
+      } catch (err) {
+        try {
+          await this.__applyConfig(previous);
+        } catch (rollbackErr) {
+          this.__configError = new ServerError('WireGuard configuration rollback failed. Restart required.', 503);
+          // eslint-disable-next-line no-console
+          console.error(this.__configError.message, rollbackErr);
+          await Util.exec('ip link set dev wg0 down');
+          throw this.__configError;
+        }
+        throw err;
+      }
+      this.__configPromise = Promise.resolve(candidate);
+      return result;
     });
   }
 
   async __applyConfig(config) {
     if (DEMO_TRAFFIC) return;
+    await this.__writeInterfaceConfig(config);
     await this.__syncFirewall(config);
     await this.__syncConfig();
     await this.__syncRoutes(config);
@@ -245,11 +324,16 @@ module.exports = class WireGuard {
     }
 
     if (failures.length > 0) {
-      throw new ServerError(`Config saved, but failed to apply ${what}:\n${failures.join('\n')}`, 500);
+      throw new ServerError(`Failed to apply ${what}:\n${failures.join('\n')}`, 500);
     }
   }
 
-  async __syncFirewall(config) {
+  /**
+   * iptables-restore input for the WG_EASY_* chains (traffic arriving on wg0).
+   * Declaring a chain in iptables-restore flushes it, so the whole rule set is
+   * replaced atomically.
+   */
+  __buildFirewallRules(config) {
     const sources = Object.values(config.clients)
       .filter((client) => client.fenced)
       .flatMap((client) => client.allowedIPs ?? [{ address: client.address, cidr: 32 }])
@@ -259,25 +343,83 @@ module.exports = class WireGuard {
       '*filter',
       ':WG_EASY_FWD - [0:0]',
       ':WG_EASY_IN - [0:0]',
+      // fenced peers may only answer connections opened towards them
       ...sources.flatMap((src) => [
         `-A WG_EASY_FWD -s ${src} -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j ACCEPT`,
         `-A WG_EASY_FWD -s ${src} -j REJECT`,
         `-A WG_EASY_IN -s ${src} -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j ACCEPT`,
         `-A WG_EASY_IN -s ${src} -j REJECT`,
       ]),
-      'COMMIT',
-    ].join('\n');
+    ];
+
+    if (!WEBUI_VPN_ACCESS) {
+      rules.push(`-A WG_EASY_IN -p tcp -m tcp --dport ${PORT} -j REJECT --reject-with tcp-reset`);
+    }
+
+    if (WG_EGRESS_FILTER) {
+      const nonPublic = NON_PUBLIC.map(fromCidr);
+      const isNonPublic = (ip) => nonPublic.some((range) => within(ip, range));
+      const allowed = parseIPv4List(WG_ALLOWED_IPS);
+      // a resolver on a private address (e.g. a LAN DNS) is reachable on port 53 only
+      const privateDns = parseIPv4List(WG_DEFAULT_DNS).filter((ip) => ip.cidr === 32 && isNonPublic(ip));
+      rules.push(
+        // peer to peer, and subnets routed by peers, stay inside the VPN
+        '-A WG_EASY_FWD -o wg0 -j RETURN',
+        '-A WG_EASY_FWD -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j RETURN',
+        ...ALWAYS_BLOCKED.map((dst) => `-A WG_EASY_FWD -d ${dst} -j REJECT`),
+        ...privateDns.flatMap((ip) => ['udp', 'tcp'].map((proto) => `-A WG_EASY_FWD -d ${toCidr(ip)} -p ${proto} -m ${proto} --dport 53 -j RETURN`)),
+        // private ranges are reachable only when WG_ALLOWED_IPS names them explicitly
+        ...allowed.filter(isNonPublic).map((ip) => `-A WG_EASY_FWD -d ${toCidr(ip)} -j RETURN`),
+        ...NON_PUBLIC.map((dst) => `-A WG_EASY_FWD -d ${dst} -j REJECT`),
+        ...allowed.filter((ip) => !isNonPublic(ip)).map((ip) => `-A WG_EASY_FWD -d ${toCidr(ip)} -j RETURN`),
+        '-A WG_EASY_FWD -j REJECT',
+      );
+    }
+
+    rules.push('COMMIT');
+    return rules.join('\n');
+  }
+
+  async __syncFirewall(config) {
+    const rules = this.__buildFirewallRules(config);
 
     await Util.exec(`iptables-restore --noflush <<'EOF'\n${rules}\nEOF`, {
       log: 'iptables-restore --noflush (WG_EASY_* chains)',
     }).catch((err) => {
-      throw new ServerError(`Config saved, but failed to apply firewall rules:\n${err.message.trim()}`, 500);
+      throw new ServerError(`Failed to apply firewall rules:\n${err.message.trim()}`, 500);
     });
 
-    await this.__runAll([
-      'iptables -C FORWARD -i wg0 -j WG_EASY_FWD 2>/dev/null || iptables -I FORWARD 1 -i wg0 -j WG_EASY_FWD',
-      'iptables -C INPUT -i wg0 -j WG_EASY_IN 2>/dev/null || iptables -I INPUT 1 -i wg0 -j WG_EASY_IN',
-    ], 'firewall hooks');
+    await this.__pinHook('FORWARD', 'WG_EASY_FWD');
+    await this.__pinHook('INPUT', 'WG_EASY_IN');
+  }
+
+  /**
+   * Makes `-i wg0 -j <target>` the first rule of `chain`. Inserts before
+   * deleting, so there is never a moment without the hook.
+   */
+  async __pinHook(chain, target) {
+    const spec = `-A ${chain} -i wg0 -j ${target}`;
+    const listRules = async () => (await Util.exec(`iptables -S ${chain}`, { log: false }))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('-A '));
+
+    try {
+      const rules = await listRules();
+      if (rules[0] === spec && !rules.slice(1).includes(spec)) return;
+
+      if (rules[0] !== spec) {
+        await Util.exec(`iptables -I ${chain} 1 -i wg0 -j ${target}`);
+      }
+      const after = await listRules();
+      for (let i = after.length - 1; i >= 1; i--) {
+        if (after[i] === spec) {
+          await Util.exec(`iptables -D ${chain} ${i + 1}`);
+        }
+      }
+    } catch (err) {
+      throw new ServerError(`Failed to apply firewall hook ${chain} -> ${target}:\n${err.message.trim()}`, 500);
+    }
   }
 
   async __syncRoutes(config) {
@@ -303,6 +445,37 @@ module.exports = class WireGuard {
       ...current.filter((dst) => !desired.has(dst)).map((dst) => `ip route del ${dst} dev wg0`),
       ...[...desired].map((dst) => `ip route replace ${dst} dev wg0`),
     ], 'routes');
+  }
+
+  /**
+   * @param {unknown} name
+   * @returns {string}
+   */
+  __validateName(name) {
+    if (typeof name !== 'string') {
+      throw new ServerError('Invalid name', 400);
+    }
+    const trimmed = name.trim();
+    if (trimmed.length === 0 || trimmed.length > MAX_NAME_LENGTH || CONTROL_CHARS.test(trimmed)) {
+      throw new ServerError(`Name must be 1-${MAX_NAME_LENGTH} printable characters`, 400);
+    }
+    return trimmed;
+  }
+
+  /**
+   * Client addresses must be hosts of the VPN /24, other than the server.
+   *
+   * @param {object} config
+   * @param {unknown} address
+   */
+  __assertClientAddress(config, address) {
+    const wgSubnet = WG_DEFAULT_ADDRESS.replace('x', '0');
+    if (!Util.isValidIPv4(address)
+      || Util.networkAddress(address, 24) !== wgSubnet
+      || ['0', '255'].includes(address.split('.')[3])
+      || address === config.server.address) {
+      throw new ServerError(`Invalid Address: ${address} (must be a host in ${wgSubnet}/24)`, 400);
+    }
   }
 
   __buildAllowedIPs(client, allowedIPs) {
@@ -350,7 +523,9 @@ module.exports = class WireGuard {
     };
 
     const { server, clients } = config ?? {};
-    if (!server || !isKey(server.privateKey) || !isKey(server.publicKey) || !Util.isValidIPv4(server.address)) {
+    const wgSubnet = WG_DEFAULT_ADDRESS.replace('x', '0');
+    if (!server || !isKey(server.privateKey) || !isKey(server.publicKey)
+      || !Util.isValidIPv4(server.address) || Util.networkAddress(server.address, 24) !== wgSubnet) {
       fail('server');
     }
     if (!clients || typeof clients !== 'object' || Array.isArray(clients)) {
@@ -358,13 +533,20 @@ module.exports = class WireGuard {
     }
 
     for (const [clientId, client] of Object.entries(clients)) {
-      if (typeof client?.name !== 'string'
-        || !Util.isValidIPv4(client.address)
+      if (!CLIENT_ID.test(clientId)
+        || typeof client?.name !== 'string'
+        || typeof client.enabled !== 'boolean'
         || !isKey(client.publicKey)
         || !isOptionalKey(client.privateKey)
         || !isOptionalKey(client.preSharedKey)
         || (client.fenced !== undefined && typeof client.fenced !== 'boolean')) {
         fail(`client ${clientId}`);
+      }
+      try {
+        client.name = this.__validateName(client.name);
+        this.__assertClientAddress(config, client.address);
+      } catch (err) {
+        fail(`client ${clientId}: ${err.message}`);
       }
       if (client.allowedIPs !== undefined) {
         client.allowedIPs = this.__buildAllowedIPs(client, client.allowedIPs);
@@ -376,7 +558,19 @@ module.exports = class WireGuard {
     }
   }
 
-  async __saveConfig(config) {
+  async __persistConfig(config) {
+    if (DEMO_TRAFFIC) return;
+    const dest = path.join(WG_PATH, 'wg0.json');
+    const temp = `${dest}.${crypto.randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temp, JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
+      await fs.rename(temp, dest);
+    } finally {
+      await fs.rm(temp, { force: true });
+    }
+  }
+
+  async __writeInterfaceConfig(config) {
     // demo data carries well-known keys: never let it reach disk or the interface
     if (DEMO_TRAFFIC) return;
     let result = `
@@ -415,9 +609,6 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     }
 
     debug('Config saving...');
-    await fs.writeFile(path.join(WG_PATH, 'wg0.json'), JSON.stringify(config, false, 2), {
-      mode: 0o660,
-    });
     await fs.writeFile(path.join(WG_PATH, 'wg0.conf'), result, {
       mode: 0o600,
     });
@@ -647,14 +838,10 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   }
 
   async createClient({ name, fenced = false }) {
-    if (!name) {
-      throw new Error('Missing: Name');
-    }
+    const validName = this.__validateName(name);
     if (typeof fenced !== 'boolean') {
       throw new ServerError('Invalid fenced', 400);
     }
-
-    const config = await this.getConfig();
 
     const privateKey = await Util.exec('wg genkey');
     const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`, {
@@ -662,120 +849,137 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     });
     const preSharedKey = await Util.exec('wg genpsk');
 
-    // Calculate next IP
-    const claimed = this.__claimedIPs(config);
-    let address;
-    for (let i = 2; i < 255; i++) {
-      const candidate = { address: WG_DEFAULT_ADDRESS.replace('x', i), cidr: 32 };
-      if (!claimed.some((ip) => Util.cidrOverlaps(ip, candidate))) {
-        address = candidate.address;
-        break;
+    return this.__mutate((config) => {
+      // Calculate next IP
+      const claimed = this.__claimedIPs(config);
+      let address;
+      for (let i = 2; i < 255; i++) {
+        const candidate = { address: WG_DEFAULT_ADDRESS.replace('x', i), cidr: 32 };
+        if (!claimed.some((ip) => Util.cidrOverlaps(ip, candidate))) {
+          address = candidate.address;
+          break;
+        }
       }
+
+      if (!address) {
+        throw new ServerError('Maximum number of clients reached.', 400);
+      }
+
+      const id = crypto.randomUUID();
+      const client = {
+        id,
+        name: validName,
+        address,
+        privateKey,
+        publicKey,
+        preSharedKey,
+
+        createdAt: new Date(),
+        updatedAt: new Date(),
+
+        allowedIPs: [{ type: 'ipv4', address, cidr: 32 }],
+
+        enabled: true,
+        fenced,
+      };
+
+      config.clients[id] = client;
+      return client;
+    });
+  }
+
+  /**
+   * Looks a client up inside a mutation.
+   */
+  __clientOf(config, clientId) {
+    const client = typeof clientId === 'string' && Object.hasOwn(config.clients, clientId)
+      ? config.clients[clientId]
+      : null;
+    if (!client) {
+      throw new ServerError(`Client Not Found: ${clientId}`, 404);
     }
-
-    if (!address) {
-      throw new Error('Maximum number of clients reached.');
-    }
-
-    // Create Client
-    const id = crypto.randomUUID();
-    const client = {
-      id,
-      name,
-      address,
-      privateKey,
-      publicKey,
-      preSharedKey,
-
-      createdAt: new Date(),
-      updatedAt: new Date(),
-
-      allowedIPs: [{ type: 'ipv4', address, cidr: 32 }],
-
-      enabled: true,
-      fenced,
-    };
-
-    config.clients[id] = client;
-
-    await this.saveConfig();
-
     return client;
   }
 
   async deleteClient({ clientId }) {
-    const config = await this.getConfig();
-
-    if (Object.hasOwn(config.clients, clientId)) {
-      delete config.clients[clientId];
-      await this.saveConfig();
-    }
+    await this.__mutate((config) => {
+      if (Object.hasOwn(config.clients, clientId)) {
+        delete config.clients[clientId];
+      }
+    });
   }
 
   async enableClient({ clientId }) {
-    const client = await this.getClient({ clientId });
-
-    client.enabled = true;
-    client.updatedAt = new Date();
-
-    await this.saveConfig();
+    await this.__mutate((config) => {
+      const client = this.__clientOf(config, clientId);
+      client.enabled = true;
+      client.updatedAt = new Date();
+    });
   }
 
   async disableClient({ clientId }) {
-    const client = await this.getClient({ clientId });
-
-    client.enabled = false;
-    client.updatedAt = new Date();
-
-    await this.saveConfig();
+    await this.__mutate((config) => {
+      const client = this.__clientOf(config, clientId);
+      client.enabled = false;
+      client.updatedAt = new Date();
+    });
   }
 
   async updateClientName({ clientId, name }) {
-    const client = await this.getClient({ clientId });
-
-    client.name = name;
-    client.updatedAt = new Date();
-
-    await this.saveConfig();
+    const validName = this.__validateName(name);
+    await this.__mutate((config) => {
+      const client = this.__clientOf(config, clientId);
+      client.name = validName;
+      client.updatedAt = new Date();
+    });
   }
 
   async updateClientFenced({ clientId, fenced }) {
-    const client = await this.getClient({ clientId });
-
     if (typeof fenced !== 'boolean') {
       throw new ServerError('Invalid fenced', 400);
     }
-
-    client.fenced = fenced;
-    client.updatedAt = new Date();
-
-    await this.saveConfig();
+    await this.__mutate((config) => {
+      const client = this.__clientOf(config, clientId);
+      client.fenced = fenced;
+      client.updatedAt = new Date();
+    });
   }
 
   async updateClientAddress({ clientId, address }) {
-    const config = await this.getConfig();
-    const client = await this.getClient({ clientId });
+    await this.__mutate((config) => {
+      const client = this.__clientOf(config, clientId);
+      this.__assertClientAddress(config, address);
 
-    if (!Util.isValidIPv4(address)) {
-      throw new ServerError(`Invalid Address: ${address}`, 400);
-    }
+      const allowedIPs = [{ type: 'ipv4', address, cidr: 32 }, ...(client.allowedIPs ?? []).slice(1)];
+      this.__assertNoOverlap(config, clientId, allowedIPs);
 
-    const allowedIPs = [{ type: 'ipv4', address, cidr: 32 }, ...(client.allowedIPs ?? []).slice(1)];
-    this.__assertNoOverlap(config, clientId, allowedIPs);
+      if (client.allowedIPs) {
+        client.allowedIPs = allowedIPs;
+      }
 
-    if (client.allowedIPs) {
-      client.allowedIPs = allowedIPs;
-    }
+      client.address = address;
+      client.updatedAt = new Date();
+    });
+  }
 
-    client.address = address;
-    client.updatedAt = new Date();
+  async updateClientAllowedIPs({ clientId, allowedIPs }) {
+    await this.__mutate((config) => {
+      const client = this.__clientOf(config, clientId);
 
-    await this.saveConfig();
+      const normalized = this.__buildAllowedIPs(client, allowedIPs);
+      this.__assertNoOverlap(config, clientId, normalized);
+
+      client.allowedIPs = normalized;
+      client.updatedAt = new Date();
+    });
   }
 
   async restoreConfiguration(config) {
     if (DEMO_TRAFFIC) {
       throw new ServerError('Restore is disabled in DEMO_TRAFFIC mode', 400);
+    }
+    if (typeof config !== 'string') {
+      throw new ServerError('Invalid configuration: expected a JSON string', 400);
     }
     debug('Starting configuration restore process.');
     let _config;
@@ -785,9 +989,9 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
       throw new ServerError(`Invalid configuration: ${err.message}`, 400);
     }
     this.__validateConfig(_config);
-    await this.__serialize(async () => {
-      await this.__saveConfig(_config);
-      await this.__applyConfig(await this.__buildConfig());
+    await this.__mutate((candidate) => {
+      candidate.server = _config.server;
+      candidate.clients = _config.clients;
     });
     debug('Configuration restore process completed.');
   }
@@ -804,19 +1008,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   async Shutdown() {
     if (DEMO_TRAFFIC) return;
     await Util.exec('wg-quick down wg0').catch(() => { });
-  }
-
-  async updateClientAllowedIPs({ clientId, allowedIPs }) {
-    const config = await this.getConfig();
-    const client = await this.getClient({ clientId });
-
-    const normalized = this.__buildAllowedIPs(client, allowedIPs);
-    this.__assertNoOverlap(config, clientId, normalized);
-
-    client.allowedIPs = normalized;
-    client.updatedAt = new Date();
-
-    await this.saveConfig();
   }
 
 };
