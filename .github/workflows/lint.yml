@@ -21,8 +21,9 @@ jobs:
           check-latest: true
           cache: 'npm'
 
-      - name: npm run lint
+      - name: Lint and test
         run: |
           cd src
           npm ci
           npm run lint
+          npm test
